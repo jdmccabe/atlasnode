@@ -207,7 +207,7 @@ def build_system_prompt(
 
 
 @mcp.prompt()
-def activate_brain\(
+def activate_brain(
     task: str | None = None,
     include_memory_summary: bool = True,
     memory_limit: int = 8,

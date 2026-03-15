@@ -1,10 +1,12 @@
 __pycache__/
 *.egg-info/
 .meridian/
+.atlasnode/
 .env
 .venv/
 build/
 dist/
 output/
 Meridian-Brain.lnk
+AtlasNode.lnk
 vecteezy_brain-human-with-infographic-line-style-icon_2482347.jpg
