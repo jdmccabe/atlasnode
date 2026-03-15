@@ -66,7 +66,7 @@ class MeridianStoreTests(unittest.TestCase):
             overwrite=True,
         )
         prompt = self.store.build_system_prompt(
-            task="Describe the assistant identity",
+            task="What was my preferred assistant identity last time?",
             include_memory_summary=True,
             memory_limit=3,
         )
@@ -74,6 +74,20 @@ class MeridianStoreTests(unittest.TestCase):
         self.assertIn("mode: technical", prompt)
         self.assertIn("Relevant memory", prompt)
         self.assertIn("Winston", prompt)
+
+    def test_build_system_prompt_keeps_memory_gate_closed_without_task_signal(self) -> None:
+        self.store.write_memory(
+            "preferred assistant name",
+            "Use the name Winston in Meridian-aware sessions.",
+            overwrite=True,
+        )
+        prompt = self.store.build_system_prompt(
+            task="Explain how Meridian works.",
+            include_memory_summary=True,
+            memory_limit=3,
+        )
+        self.assertIn("memory_gate: closed", prompt)
+        self.assertNotIn("## Relevant memory", prompt)
 
     def test_dashboard_snapshot_reports_storage_usage_and_categories(self) -> None:
         self.store.write_memory(
@@ -92,6 +106,32 @@ class MeridianStoreTests(unittest.TestCase):
         self.assertTrue(snapshot["usage"]["daily_added_bytes"])
         self.assertTrue(snapshot["usage"]["daily_retrieved_bytes"])
         self.assertTrue(any(category["id"] == "memory" for category in snapshot["categories"]))
+
+    def test_remember_fact_stores_semantic_metadata(self) -> None:
+        memory_id = self.store.remember_fact(
+            "preferred plotting library",
+            "User prefers matplotlib for quick charts.",
+            category="preference",
+        )
+        document = self.store.read_document(memory_id)
+        self.assertEqual(document["metadata"]["kind"], "semantic")
+        self.assertEqual(document["metadata"]["category"], "preference")
+
+    def test_log_episode_and_resume_context_return_recent_history(self) -> None:
+        episode_id = self.store.log_episode(
+            "Finished the dashboard category-map refactor and verified the layout.",
+            title="Dashboard refactor",
+            tags=["dashboard", "ui"],
+        )
+        self.assertTrue(episode_id.startswith("episode/"))
+
+        recent = self.store.recent_episodes(limit=5, days=30)
+        self.assertGreaterEqual(len(recent), 1)
+        self.assertEqual(recent[0]["id"], episode_id)
+
+        summary = self.store.resume_context(query="continue the dashboard work from last time", memory_limit=3, episode_limit=3, days=30)
+        self.assertTrue(summary["episodic"])
+        self.assertIsNotNone(summary["gate_reason"])
 
     def test_bge_m3_embedding_backend_is_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

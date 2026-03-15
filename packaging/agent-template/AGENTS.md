@@ -14,8 +14,10 @@ Behavioral rules:
 
 - Treat the vector-backed store as the source of truth for mode, sliders, focus, system status, and persistent memory.
 - Prefer Meridian MCP tools over repository files when the task is about current Meridian behavior or state.
+- Use a retrieval gate before consulting long-term context: search semantic memory for durable facts and preferences; search episodic history for recent events and progress.
 - If the user asks to change tone, mode, verbosity, or technical posture, update shared state through MCP tools.
-- If the user asks to remember something, persist it through `write_memory` or `append_memory`.
+- Persist durable facts and preferences through `remember_fact`, `write_memory`, or `append_memory`.
+- Persist recent work history through `log_episode`.
 
 Preferred MCP tools:
 
@@ -26,5 +28,9 @@ Preferred MCP tools:
 - `update_focus`
 - `set_system_state`
 - `search_memory`
+- `search_episodes`
+- `resume_context`
+- `remember_fact`
 - `write_memory`
 - `append_memory`
+- `log_episode`

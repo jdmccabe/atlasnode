@@ -89,9 +89,21 @@ def list_memories() -> list[str]:
 
 
 @mcp.tool()
+def list_episodes(limit: int = 50) -> list[str]:
+    """List recent episodic history records from the vector store."""
+    return store.list_episodes(limit=limit)
+
+
+@mcp.tool()
 def search_memory(query: str, limit: int = 10) -> list[dict[str, str | int | float]]:
     """Search persisted memories using hybrid vector and lexical retrieval."""
     return _search_response(query, {"memory"}, limit=limit)
+
+
+@mcp.tool()
+def search_episodes(query: str, limit: int = 10) -> list[dict[str, str | int | float]]:
+    """Search episodic history records using hybrid vector and lexical retrieval."""
+    return _search_response(query, {"episode"}, limit=limit)
 
 
 @mcp.tool()
@@ -101,9 +113,43 @@ def write_memory(name: str, content: str, overwrite: bool = False) -> str:
 
 
 @mcp.tool()
+def remember_fact(name: str, content: str, category: str = "general", overwrite: bool = True) -> str:
+    """Write or update a semantic fact memory with an optional category."""
+    return store.remember_fact(name, content, category=category, overwrite=overwrite)
+
+
+@mcp.tool()
 def append_memory(name: str, content: str) -> str:
     """Append to an existing memory record or create it if missing."""
     return store.append_memory(name, content)
+
+
+@mcp.tool()
+def log_episode(summary: str, title: str | None = None, tags: list[str] | None = None) -> str:
+    """Log a time-ordered episodic summary for recent work, decisions, or session outcomes."""
+    return store.log_episode(summary, title=title, tags=tags)
+
+
+@mcp.tool()
+def recent_episodes(limit: int = 8, days: int = 7) -> list[dict[str, Any]]:
+    """Return recent episodic history records ordered by recency."""
+    return store.recent_episodes(limit=limit, days=days)
+
+
+@mcp.tool()
+def resume_context(
+    query: str | None = None,
+    memory_limit: int = 5,
+    episode_limit: int = 5,
+    days: int = 7,
+) -> dict[str, Any]:
+    """Return combined semantic and episodic context for resuming work."""
+    return store.resume_context(
+        query=query,
+        memory_limit=memory_limit,
+        episode_limit=episode_limit,
+        days=days,
+    )
 
 
 @mcp.tool()

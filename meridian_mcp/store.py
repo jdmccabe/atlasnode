@@ -159,9 +159,11 @@ SEED_DOCUMENTS = (
         doc_type="protocol",
         title="Retrieval Protocol",
         content=(
-            "Before substantial work, read the current runtime state. Build prompts from the active mode, "
-            "core operating documents, and the top task-relevant documents returned by hybrid retrieval. "
-            "When prior context may matter, query durable memory instead of assuming."
+            "Before substantial work, read the current runtime state. Use a think-before-you-act retrieval gate: "
+            "first ask whether the current request can be answered from the active chat and runtime state alone. "
+            "Only query durable memory or episodic history when the task references prior work, user preferences, "
+            "project status, vague follow-up context, or missing facts that are likely stored. Build prompts from "
+            "the active mode, core operating documents, and only the task-relevant supporting context returned by retrieval."
         ),
     ),
     SeedDocument(
@@ -170,8 +172,19 @@ SEED_DOCUMENTS = (
         title="Memory Protocol",
         content=(
             "Persist durable user preferences, identity facts, corrections, project milestones, and high "
-            "value technical learnings as memory records. Prefer one concept per memory. Update an "
-            "existing memory when it changes rather than creating near-duplicates."
+            "value technical learnings as semantic memory records. Prefer one concept per memory. Update an "
+            "existing memory when it changes rather than creating near-duplicates. Do not store secrets or "
+            "credentials in memory."
+        ),
+    ),
+    SeedDocument(
+        doc_id="protocol/episodes",
+        doc_type="protocol",
+        title="Episodic History Protocol",
+        content=(
+            "Keep episodic history separate from semantic memory. Episodic records capture time-ordered summaries "
+            "of what happened, such as decisions, milestones, or session outcomes. Use episodic history for questions "
+            "like what changed recently, what we did yesterday, or where work left off."
         ),
     ),
     SeedDocument(
@@ -579,6 +592,42 @@ def _date_only(iso_timestamp: str) -> str:
     return iso_timestamp[:10]
 
 
+MEMORY_GATE_PATTERNS = (
+    "last time",
+    "previously",
+    "before",
+    "earlier",
+    "yesterday",
+    "recently",
+    "we did",
+    "we were",
+    "resume",
+    "continue",
+    "pick up",
+    "next step",
+    "my project",
+    "my preference",
+    "my preferences",
+    "my setup",
+    "our discussion",
+    "our plan",
+    "what did we",
+    "where did we",
+)
+
+
+def _memory_gate_reason(task: str | None) -> str | None:
+    if not task:
+        return None
+    normalized = " ".join(task.lower().split())
+    for pattern in MEMORY_GATE_PATTERNS:
+        if pattern in normalized:
+            return f"task references prior context ({pattern})"
+    if any(token in normalized for token in ("preference", "prefer", "remember", "history", "status", "decision")):
+        return "task appears to depend on stored user or project context"
+    return None
+
+
 class MeridianStore:
     def __init__(self, repo_root: Path | None = None, data_root: Path | None = None) -> None:
         self.repo_root = repo_root or Path(__file__).resolve().parent.parent
@@ -702,20 +751,25 @@ class MeridianStore:
 
             document_count = connection.execute("SELECT COUNT(*) AS count FROM documents").fetchone()["count"]
             if document_count == 0:
-                for document in SEED_DOCUMENTS:
-                    self._upsert_document(
-                        connection=connection,
-                        doc_id=document.doc_id,
-                        doc_type=document.doc_type,
-                        title=document.title,
-                        content=document.content,
-                        source=document.source,
-                        metadata={},
-                    )
+                self._sync_seed_documents(connection)
                 self._set_metadata(connection, "embedding_signature", _active_embedding_signature())
                 self._set_metadata(connection, "chunk_signature", _chunk_signature())
             else:
+                self._sync_seed_documents(connection)
                 self._sync_embeddings(connection)
+
+    def _sync_seed_documents(self, connection: sqlite3.Connection) -> None:
+        for document in SEED_DOCUMENTS:
+            self._upsert_document(
+                connection=connection,
+                doc_id=document.doc_id,
+                doc_type=document.doc_type,
+                title=document.title,
+                content=document.content,
+                source=document.source,
+                metadata={},
+                track_write_event=False,
+            )
 
     def default_state(self) -> dict[str, Any]:
         default_sliders = dict(SLIDER_DEFAULTS)
@@ -1146,6 +1200,20 @@ class MeridianStore:
             ).fetchall()
             return [row["doc_id"] for row in rows]
 
+    def list_episodes(self, limit: int = 50) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT doc_id
+                FROM documents
+                WHERE doc_type = 'episode'
+                ORDER BY updated_at DESC, doc_id
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+            return [row["doc_id"] for row in rows]
+
     def latest_memories(self, limit: int) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -1164,6 +1232,33 @@ class MeridianStore:
                     "title": row["title"],
                     "excerpt": _excerpt(row["content"], row["title"]),
                     "updated_at": row["updated_at"],
+                }
+                for row in rows
+            ]
+
+    def recent_episodes(self, limit: int = 8, days: int = 7) -> list[dict[str, Any]]:
+        cutoff = datetime.now(UTC).replace(microsecond=0)
+        cutoff = cutoff.timestamp() - (max(1, days) * 86400)
+        cutoff_iso = datetime.fromtimestamp(cutoff, UTC).isoformat().replace("+00:00", "Z")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT doc_id, title, content, metadata_json, created_at, updated_at
+                FROM documents
+                WHERE doc_type = 'episode' AND updated_at >= ?
+                ORDER BY updated_at DESC, doc_id
+                LIMIT ?
+                """,
+                (cutoff_iso, max(1, limit)),
+            ).fetchall()
+            return [
+                {
+                    "id": row["doc_id"],
+                    "title": row["title"],
+                    "excerpt": _excerpt(row["content"], row["title"]),
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "metadata": json.loads(row["metadata_json"]),
                 }
                 for row in rows
             ]
@@ -1193,6 +1288,41 @@ class MeridianStore:
             )
             state["pending_writes"] = 0
             state["focus"]["past"] = f"Stored memory {memory_id}"
+            self._save_state(connection, state)
+            return memory_id
+
+    def remember_fact(
+        self,
+        name: str,
+        content: str,
+        *,
+        category: str = "general",
+        overwrite: bool = True,
+    ) -> str:
+        memory_id = f"memory/{_slugify(name)}"
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT doc_id FROM documents WHERE doc_id = ?",
+                (memory_id,),
+            ).fetchone()
+            if existing is not None and not overwrite:
+                raise FileExistsError(f"Memory already exists: {memory_id}")
+
+            self._upsert_document(
+                connection=connection,
+                doc_id=memory_id,
+                doc_type="memory",
+                title=name.strip(),
+                content=content,
+                source="memory",
+                metadata={"kind": "semantic", "category": _slugify(category) or "general"},
+            )
+
+            state = self._row_to_state(
+                connection.execute("SELECT * FROM runtime_state WHERE singleton = 1").fetchone()
+            )
+            state["pending_writes"] = 0
+            state["focus"]["past"] = f"Stored semantic memory {memory_id}"
             self._save_state(connection, state)
             return memory_id
 
@@ -1227,6 +1357,76 @@ class MeridianStore:
             state["focus"]["past"] = f"Updated memory {memory_id}"
             self._save_state(connection, state)
             return memory_id
+
+    def log_episode(
+        self,
+        summary: str,
+        *,
+        title: str | None = None,
+        tags: list[str] | None = None,
+        occurred_at: str | None = None,
+    ) -> str:
+        normalized_summary = summary.strip()
+        if not normalized_summary:
+            raise ValueError("Episode summary must not be empty.")
+        timestamp = occurred_at.strip() if occurred_at else _utc_now()
+        day = _date_only(timestamp)
+        slug = _slugify((title or normalized_summary[:48]).strip())
+        episode_id = f"episode/{day}/{slug or 'entry'}"
+        with self._connect() as connection:
+            suffix = 1
+            candidate_id = episode_id
+            while connection.execute("SELECT 1 FROM documents WHERE doc_id = ?", (candidate_id,)).fetchone():
+                suffix += 1
+                candidate_id = f"{episode_id}-{suffix}"
+            episode_id = candidate_id
+
+            self._upsert_document(
+                connection=connection,
+                doc_id=episode_id,
+                doc_type="episode",
+                title=(title or f"Episode {day}").strip(),
+                content=normalized_summary,
+                source="episode",
+                metadata={
+                    "kind": "episodic",
+                    "tags": sorted({_slugify(tag) for tag in (tags or []) if _slugify(tag)}),
+                    "occurred_at": timestamp,
+                },
+            )
+
+            state = self._row_to_state(
+                connection.execute("SELECT * FROM runtime_state WHERE singleton = 1").fetchone()
+            )
+            state["pending_writes"] = 0
+            state["focus"]["past"] = f"Logged episode {episode_id}"
+            self._save_state(connection, state)
+            return episode_id
+
+    def resume_context(
+        self,
+        query: str | None = None,
+        *,
+        memory_limit: int = 5,
+        episode_limit: int = 5,
+        days: int = 7,
+    ) -> dict[str, Any]:
+        semantic = (
+            self.search_documents(query, {"memory"}, limit=memory_limit)
+            if query and query.strip()
+            else self.latest_memories(memory_limit)
+        )
+        episodic = (
+            self.search_documents(query, {"episode"}, limit=episode_limit)
+            if query and query.strip()
+            else self.recent_episodes(limit=episode_limit, days=days)
+        )
+        return {
+            "query": query or "",
+            "semantic": semantic,
+            "episodic": episodic,
+            "gate_reason": _memory_gate_reason(query),
+        }
 
     def reset_state(self) -> dict[str, Any]:
         with self._connect() as connection:
@@ -1302,6 +1502,7 @@ class MeridianStore:
         memory_limit: int = 8,
     ) -> str:
         state = self.state_response()
+        gate_reason = _memory_gate_reason(task)
         core_ids = [
             "system/core",
             "protocol/retrieval",
@@ -1311,6 +1512,7 @@ class MeridianStore:
         ]
         if include_memory_summary:
             core_ids.append("protocol/memory")
+            core_ids.append("protocol/episodes")
 
         core_documents = [self.read_document(doc_id) for doc_id in core_ids]
 
@@ -1320,20 +1522,13 @@ class MeridianStore:
                 if match["id"] not in core_ids:
                     related_documents.append(self.read_document(match["id"]))
 
-        if include_memory_summary:
-            if task:
-                memory_matches = self.search_documents(task, {"memory"}, limit=memory_limit)
-                memory_lines = [
-                    f"- {match['id']}: {match['excerpt']}"
-                    for match in memory_matches
-                ]
-            else:
-                memory_lines = [
-                    f"- {record['id']}: {record['excerpt']}"
-                    for record in self.latest_memories(memory_limit)
-                ]
-        else:
-            memory_lines = []
+        memory_lines: list[str] = []
+        episode_lines: list[str] = []
+        if include_memory_summary and task and gate_reason:
+            memory_matches = self.search_documents(task, {"memory"}, limit=memory_limit)
+            memory_lines = [f"- {match['id']}: {match['excerpt']}" for match in memory_matches]
+            episode_matches = self.search_documents(task, {"episode"}, limit=max(3, min(memory_limit, 6)))
+            episode_lines = [f"- {match['id']}: {match['excerpt']}" for match in episode_matches]
 
         sections = [
             "# Meridian runtime prompt",
@@ -1361,6 +1556,17 @@ class MeridianStore:
         if task:
             sections.extend(["", "## Current task", task.strip()])
 
+        sections.extend(
+            [
+                "",
+                "## Retrieval gate",
+                "- First ask whether the current request can be answered from the active chat and runtime state alone.",
+                "- Consult semantic memory only when the task depends on prior preferences, durable facts, project details, or missing context.",
+                "- Consult episodic history only when the task depends on recent events, prior sessions, progress, or what happened over time.",
+                f"- memory_gate: {'open - ' + gate_reason if gate_reason else 'closed - no strong signal that stored context is required yet'}",
+            ]
+        )
+
         sections.extend(["", "## Core directives"])
         for document in core_documents:
             sections.extend(
@@ -1384,6 +1590,8 @@ class MeridianStore:
 
         if memory_lines:
             sections.extend(["## Relevant memory", *memory_lines, ""])
+        if episode_lines:
+            sections.extend(["## Relevant episodic history", *episode_lines, ""])
 
         prompt = "\n".join(sections).strip() + "\n"
         with self._connect() as connection:
@@ -1550,6 +1758,11 @@ class MeridianStore:
                     "stored_content_bytes": total_stored_bytes,
                     "document_count": sum(item["count"] for item in stored_breakdown),
                     "memory_count": self._memory_count(connection),
+                    "episode_count": int(
+                        connection.execute(
+                            "SELECT COUNT(*) AS count FROM documents WHERE doc_type = 'episode'"
+                        ).fetchone()["count"]
+                    ),
                     "breakdown": stored_breakdown,
                 },
                 "usage": {
@@ -1562,4 +1775,8 @@ class MeridianStore:
                     ),
                 },
                 "categories": self._category_summary(connection),
+                "recent_context": {
+                    "semantic": self.latest_memories(4),
+                    "episodic": self.recent_episodes(limit=4, days=max(days, 7)),
+                },
             }

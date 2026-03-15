@@ -31,6 +31,7 @@ MANAGED_SERVICE_HOST = os.getenv("MERIDIAN_MANAGED_HOST", "127.0.0.1")
 MANAGED_SERVICE_PORT = int(os.getenv("MERIDIAN_MANAGED_PORT", "8000"))
 DASHBOARD_PORT = int(os.getenv("MERIDIAN_DASHBOARD_PORT", "8765"))
 DASHBOARD_IDLE_TIMEOUT_SECONDS = int(os.getenv("MERIDIAN_DASHBOARD_IDLE_TIMEOUT_SECONDS", "20"))
+DASHBOARD_BUILD = datetime.fromtimestamp(Path(__file__).stat().st_mtime, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _utc_now() -> str:
@@ -321,6 +322,7 @@ def _dashboard_payload() -> dict[str, Any]:
             "pid": os.getpid(),
             "url": f"http://127.0.0.1:{DASHBOARD_PORT}",
             "generated_at": _utc_now(),
+            "build": DASHBOARD_BUILD,
             "active_clients": session_tracker.active_clients(),
             "idle_timeout_seconds": DASHBOARD_IDLE_TIMEOUT_SECONDS,
         },
@@ -420,7 +422,7 @@ DASHBOARD_HTML = """<!doctype html>
       overflow: hidden;
     }
     .shell {
-      max-width: 1280px;
+      max-width: 1500px;
       margin: 0 auto;
       padding: 12px;
       height: 100vh;
@@ -500,30 +502,32 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .dashboard-body {
       display: grid;
-      grid-template-columns: minmax(220px, 0.9fr) minmax(0, 2.1fr);
+      grid-template-columns: minmax(230px, 0.72fr) minmax(0, 1.96fr) minmax(300px, 1fr);
+      grid-template-rows: minmax(0, 1fr) 196px;
       gap: 12px;
+      height: 100%;
       min-height: 0;
+      align-items: stretch;
     }
     .stats-column {
       display: grid;
       gap: 12px;
       align-content: start;
       min-width: 0;
-    }
-    .insights-column {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      min-width: 0;
+      grid-column: 1;
+      grid-row: 1;
+      min-height: 0;
     }
     .card {
-      min-height: 92px;
+      min-height: 78px;
     }
     .category-panel {
-      grid-column: 1 / -1;
-    }
-    .wide {
-      grid-column: span 1;
+      grid-column: 2;
+      grid-row: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
     }
     .stat {
       font-size: clamp(1.38rem, 2vw, 1.95rem);
@@ -553,21 +557,39 @@ DASHBOARD_HTML = """<!doctype html>
       font-size: 0.94rem;
     }
     .chart {
-      margin-top: 10px;
+      margin-top: 0;
       width: 100%;
-      height: 164px;
+      height: 146px;
       border-radius: 14px;
       background: linear-gradient(180deg, rgba(255,255,255,0.65), rgba(233,223,208,0.55));
       border: 1px solid rgba(77, 60, 35, 0.10);
       overflow: hidden;
     }
+    .usage-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: stretch;
+      margin-top: 8px;
+      min-height: 0;
+      height: calc(100% - 24px);
+    }
+    .usage-side {
+      display: grid;
+      align-content: center;
+      gap: 10px;
+      min-width: 112px;
+    }
     .legend {
       display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-top: 8px;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 0;
       color: var(--muted);
       font-size: 0.85rem;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .swatch {
       display: inline-block;
@@ -578,8 +600,8 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .breakdown {
       display: grid;
-      gap: 8px;
-      margin-top: 10px;
+      gap: 7px;
+      margin-top: 8px;
     }
     .bar {
       display: grid;
@@ -601,16 +623,107 @@ DASHBOARD_HTML = """<!doctype html>
     }
     .sunburst-svg {
       width: 100%;
-      height: 360px;
+      height: 100%;
+      min-height: 0;
       margin-top: 8px;
       border-radius: 14px;
       background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(233,223,208,0.4));
       border: 1px solid rgba(77, 60, 35, 0.10);
       overflow: hidden;
     }
+    .context-panel {
+      min-height: 0;
+      grid-column: 3;
+      grid-row: 1;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      overflow: hidden;
+    }
+    .context-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+      min-height: 0;
+      grid-template-rows: minmax(0, 1fr) minmax(72px, auto);
+    }
+    .context-block {
+      border-radius: 14px;
+      border: 1px solid rgba(77, 60, 35, 0.10);
+      background: rgba(255, 255, 255, 0.46);
+      padding: 10px 11px;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .context-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 0.86rem;
+    }
+    .context-badge {
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.7rem;
+      background: rgba(31, 26, 23, 0.08);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .context-list {
+      display: grid;
+      gap: 8px;
+      max-height: none;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .context-item {
+      display: grid;
+      gap: 2px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(77, 60, 35, 0.08);
+    }
+    .context-item:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+    .context-title {
+      font-size: 0.84rem;
+      font-weight: 700;
+      line-height: 1.18;
+    }
+    .context-excerpt {
+      font-size: 0.76rem;
+      line-height: 1.25;
+      color: var(--muted);
+    }
+    .context-meta {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
     .compact-note {
       font-size: 0.9rem;
       line-height: 1.28;
+    }
+    .bottom-panel {
+      min-height: 0;
+      align-self: end;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .bottom-row {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      min-width: 0;
+      min-height: 0;
     }
     a {
       color: var(--accent);
@@ -619,7 +732,13 @@ DASHBOARD_HTML = """<!doctype html>
     @media (max-width: 1100px) {
       body { overflow: auto; }
       .shell { height: auto; }
-      .hero, .dashboard-body, .insights-column { grid-template-columns: 1fr; }
+      .hero, .dashboard-body { grid-template-columns: 1fr; }
+      .dashboard-body { grid-template-rows: auto; }
+      .stats-column, .category-panel, .context-panel, .bottom-row {
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .bottom-row { grid-template-columns: 1fr; }
       .sunburst-svg { height: 250px; }
     }
   </style>
@@ -636,6 +755,7 @@ DASHBOARD_HTML = """<!doctype html>
               <span id="status-dot" class="dot"></span>
               <strong id="status-text">Checking service...</strong>
             </div>
+            <div id="build-stamp" class="subtle compact-note">UI build: loading...</div>
             <div id="status-detail" class="subtle compact-note">Loading current Meridian status.</div>
           </div>
           <div class="controls">
@@ -680,24 +800,48 @@ DASHBOARD_HTML = """<!doctype html>
         </section>
       </div>
 
-      <div class="insights-column">
-        <section class="panel category-panel">
-          <div class="label">Category Map</div>
-          <svg id="category-sunburst" class="sunburst-svg" viewBox="0 0 920 360" preserveAspectRatio="xMidYMid meet"></svg>
-        </section>
+      <section class="panel category-panel">
+        <div class="label">Category Map</div>
+        <svg id="category-sunburst" class="sunburst-svg" viewBox="0 0 660 320" preserveAspectRatio="xMidYMid meet"></svg>
+      </section>
 
-        <section class="panel wide">
+      <section class="panel context-panel">
+        <div class="label">Recent Context</div>
+        <div class="context-grid">
+          <div class="context-block">
+            <div class="context-heading">
+              <strong>Semantic memory</strong>
+              <span id="semantic-count" class="context-badge">-</span>
+            </div>
+            <div id="semantic-list" class="context-list"></div>
+          </div>
+          <div class="context-block">
+            <div class="context-heading">
+              <strong>Episodic history</strong>
+              <span id="episodic-count" class="context-badge">-</span>
+            </div>
+            <div id="episodic-list" class="context-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <div class="bottom-row">
+        <section class="panel bottom-panel">
           <div class="label">Storage Breakdown</div>
           <div id="breakdown" class="breakdown"></div>
         </section>
 
-        <section class="panel wide">
+        <section class="panel bottom-panel">
           <div class="label">Usage Over Time</div>
-          <div id="usage-note" class="subtle">Loading activity history.</div>
-          <svg id="usage-chart" class="chart" viewBox="0 0 800 260" preserveAspectRatio="none"></svg>
-          <div class="legend">
-            <span><span class="swatch" style="background:#1d6b56"></span>Data added</span>
-            <span><span class="swatch" style="background:#a54b2a"></span>Data retrieved</span>
+          <div class="usage-layout">
+            <svg id="usage-chart" class="chart" viewBox="0 0 800 220" preserveAspectRatio="none"></svg>
+            <div class="usage-side">
+              <div id="usage-note" class="subtle"></div>
+              <div class="legend">
+                <span><span class="swatch" style="background:#1d6b56"></span>Data added</span>
+                <span><span class="swatch" style="background:#a54b2a"></span>Data retrieved</span>
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -784,10 +928,10 @@ DASHBOARD_HTML = """<!doctype html>
       }));
       const maxValue = Math.max(1, ...values.flatMap(item => [item.added, item.retrieved]));
       const width = 800;
-      const height = 260;
+      const height = 198;
       const chartLeft = 42;
-      const chartBottom = 220;
-      const chartTop = 22;
+      const chartBottom = 158;
+      const chartTop = 18;
       const chartWidth = width - chartLeft - 20;
       const slot = chartWidth / values.length;
       const barWidth = Math.max(6, slot * 0.32);
@@ -805,13 +949,31 @@ DASHBOARD_HTML = """<!doctype html>
         const label = item.day.slice(5);
         parts.push(`<rect x="${x}" y="${chartBottom - addedHeight}" width="${barWidth}" height="${addedHeight}" rx="5" fill="#1d6b56"></rect>`);
         parts.push(`<rect x="${x + barWidth + 4}" y="${chartBottom - retrievedHeight}" width="${barWidth}" height="${retrievedHeight}" rx="5" fill="#a54b2a"></rect>`);
-        parts.push(`<text x="${x + barWidth}" y="${chartBottom + 18}" text-anchor="middle" font-size="11" fill="#675a4a">${label}</text>`);
+        parts.push(`<text x="${x + barWidth}" y="${chartBottom + 16}" text-anchor="middle" font-size="11" fill="#675a4a">${label}</text>`);
       });
 
       svg.innerHTML = parts.join("");
-      note.textContent = usage.retrieval_history_available
-        ? "Daily data added and data retrieved in Meridian."
-        : usage.retrieval_history_note;
+      note.textContent = usage.retrieval_history_available ? "" : usage.retrieval_history_note;
+    }
+
+    function renderContextList(hostId, items, emptyLabel, metaField = "updated_at") {
+      const host = document.getElementById(hostId);
+      host.innerHTML = "";
+      if (!items.length) {
+        host.innerHTML = `<div class="empty">${emptyLabel}</div>`;
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "context-item";
+        const meta = String(item[metaField] || "").replace("T", " ").replace("Z", " UTC");
+        row.innerHTML = `
+          <div class="context-title">${item.title || item.id}</div>
+          <div class="context-excerpt">${item.excerpt || ""}</div>
+          <div class="context-meta">${meta || item.id}</div>
+        `;
+        host.appendChild(row);
+      }
     }
 
     function polarToCartesian(cx, cy, radius, angle) {
@@ -858,21 +1020,35 @@ DASHBOARD_HTML = """<!doctype html>
     function renderCategories(categories) {
       const svg = document.getElementById("category-sunburst");
       svg.innerHTML = "";
+      const bounds = svg.getBoundingClientRect();
+      const width = Math.max(660, Math.round(bounds.width || 660));
+      const height = Math.max(320, Math.round(bounds.height || 320));
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
       if (!categories.length) {
-        svg.innerHTML = `<text x="460" y="118" text-anchor="middle" dominant-baseline="middle" font-size="16" fill="#675a4a">No stored categories yet.</text>`;
+        svg.innerHTML = `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" dominant-baseline="middle" font-size="16" fill="#675a4a">No stored categories yet.</text>`;
         return;
       }
 
-      const width = 920;
-      const height = 360;
-      const centerX = 316;
-      const centerY = 180;
+      const baseWidth = 660;
+      const baseHeight = 320;
+      const scale = Math.min(width / baseWidth, height / baseHeight) * 1.15;
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const centerRadius = 40 * scale;
+      const categoryInner = 52 * scale;
+      const categoryOuter = 148 * scale;
+      const childInner = 154 * scale;
+      const childOuter = 224 * scale;
+      const categoryGuide = 134 * scale;
+      const childGuide = 190 * scale;
+      const categoryLabelRadius = 104 * scale;
+      const childLabelRadius = 188 * scale;
       const totalBytes = Math.max(1, categories.reduce((sum, item) => sum + (item.bytes || 0), 0));
       const parts = [
         `<rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>`,
-        `<circle cx="${centerX}" cy="${centerY}" r="42" fill="rgba(255,255,255,0.86)" stroke="rgba(77,60,35,0.08)"></circle>`,
-        `<circle cx="${centerX}" cy="${centerY}" r="104" fill="none" stroke="rgba(255,255,255,0.24)" stroke-width="1"></circle>`,
-        `<circle cx="${centerX}" cy="${centerY}" r="162" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"></circle>`,
+        `<circle cx="${centerX}" cy="${centerY}" r="${centerRadius}" fill="rgba(255,255,255,0.86)" stroke="rgba(77,60,35,0.08)"></circle>`,
+        `<circle cx="${centerX}" cy="${centerY}" r="${categoryGuide}" fill="none" stroke="rgba(255,255,255,0.24)" stroke-width="1"></circle>`,
+        `<circle cx="${centerX}" cy="${centerY}" r="${childGuide}" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="1"></circle>`,
         `<text x="${centerX}" y="${centerY - 6}" text-anchor="middle" font-size="11" fill="#675a4a" letter-spacing="1.1">STORE</text>`,
         `<text x="${centerX}" y="${centerY + 12}" text-anchor="middle" font-size="16" font-weight="700" fill="#1f1a17">${formatKilobytes(totalBytes)}</text>`
       ];
@@ -888,10 +1064,10 @@ DASHBOARD_HTML = """<!doctype html>
         const end = cursor + Math.max(categorySweep, 0.035);
         const color = colorForIndex(index, 0.92);
         const categoryMid = (start + end) / 2;
-        const categoryArcLength = 78 * (end - start);
+        const categoryArcLength = (categoryOuter - categoryInner) * 1.19 * (end - start);
 
         parts.push(
-          `<path d="${donutPath(centerX, centerY, 52, 116, start, end)}" fill="${color}" stroke="rgba(255,255,255,0.72)" stroke-width="1.2"></path>`
+          `<path d="${donutPath(centerX, centerY, categoryInner, categoryOuter, start, end)}" fill="${color}" stroke="rgba(255,255,255,0.72)" stroke-width="1.2"></path>`
         );
 
         const children = category.children || [];
@@ -904,14 +1080,14 @@ DASHBOARD_HTML = """<!doctype html>
           const childEnd = childCursor + Math.max(childSweep, 0.016);
           const childColor = colorForIndex(index + childIndex + 1, 0.26 + (0.54 * ((childIndex % 4) + 1) / 4));
           parts.push(
-            `<path d="${donutPath(centerX, centerY, 122, 186, childStart, childEnd)}" fill="${childColor}" stroke="rgba(255,255,255,0.84)" stroke-width="1"></path>`
+            `<path d="${donutPath(centerX, centerY, childInner, childOuter, childStart, childEnd)}" fill="${childColor}" stroke="rgba(255,255,255,0.84)" stroke-width="1"></path>`
           );
           largeChildren.push({ child, start: childStart, end: childEnd });
           childCursor += childSweep;
         });
 
         if (categoryArcLength > 40) {
-          const labelPoint = polarToCartesian(centerX, centerY, 84, categoryMid);
+          const labelPoint = polarToCartesian(centerX, centerY, categoryLabelRadius, categoryMid);
           parts.push(
             `<text x="${labelPoint.x.toFixed(2)}" y="${labelPoint.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="700" fill="#ffffff">${compactLabel(category.label, categoryArcLength > 68 ? 12 : 8)}</text>`
           );
@@ -927,9 +1103,9 @@ DASHBOARD_HTML = """<!doctype html>
           .slice(0, 3)
           .forEach(({ child, start: childStart, end: childEnd }) => {
             const childMid = (childStart + childEnd) / 2;
-            const childArcLength = 154 * (childEnd - childStart);
+            const childArcLength = childLabelRadius * 1.07 * (childEnd - childStart);
             if (childArcLength <= 36) return;
-            const childPoint = polarToCartesian(centerX, centerY, 154, childMid);
+            const childPoint = polarToCartesian(centerX, centerY, childLabelRadius, childMid);
             parts.push(
               `<text x="${childPoint.x.toFixed(2)}" y="${childPoint.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" font-size="${childArcLength > 76 ? 10 : 9}" font-weight="600" fill="#1f1a17">${compactLabel(child.label, childArcLength > 76 ? 14 : 10)}</text>`
             );
@@ -954,6 +1130,7 @@ DASHBOARD_HTML = """<!doctype html>
 
       document.getElementById("status-dot").className = service.running ? "dot live" : "dot";
       document.getElementById("status-text").textContent = service.running ? "Meridian is running" : "Meridian is stopped";
+      document.getElementById("build-stamp").textContent = `UI build: ${data.dashboard.build}`;
       document.getElementById("status-detail").textContent = service.detail;
       document.getElementById("service-url").textContent = service.service_url;
       document.getElementById("service-url").href = service.service_url;
@@ -968,11 +1145,15 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById("stored-bytes").textContent = formatBytes(storage.stored_content_bytes);
       document.getElementById("stored-meta").textContent = `${storage.breakdown.length} groups`;
       document.getElementById("document-count").textContent = String(storage.document_count);
-      document.getElementById("memory-count").textContent = `${storage.memory_count} memory records`;
+      document.getElementById("memory-count").textContent = `${storage.memory_count} memory records • ${storage.episode_count} episodes`;
+      document.getElementById("semantic-count").textContent = `${snapshot.recent_context.semantic.length} shown`;
+      document.getElementById("episodic-count").textContent = `${snapshot.recent_context.episodic.length} shown`;
 
       renderBreakdown(storage.breakdown);
       renderUsageChart(snapshot.usage);
       renderCategories(snapshot.categories);
+      renderContextList("semantic-list", snapshot.recent_context.semantic, "No semantic memories yet.");
+      renderContextList("episodic-list", snapshot.recent_context.episodic, "No recent episodes yet.", "created_at");
     }
 
     async function refresh() {

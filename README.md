@@ -19,8 +19,10 @@ The markdown brain has been removed. Runtime data now lives in `.meridian/meridi
 
 - Shared runtime state for mode, sliders, focus, and system status
 - Hybrid search over operational documents
-- Hybrid search over durable memory
-- Memory write and append operations
+- Hybrid search over semantic memory
+- Hybrid search over episodic history
+- Semantic memory write/update operations
+- Episodic history logging and resume-context retrieval
 - Prompt assembly from the live store
 
 ## Setup
@@ -73,6 +75,20 @@ Retrieval history is only available from the point this build started recording 
 - Local store path: `.meridian/meridian.sqlite3`
 - The store is ignored by git.
 - Seed operational documents are initialized automatically if the database does not exist.
+
+## Memory model
+
+- Semantic memory stores durable facts, preferences, project details, and corrections.
+- Episodic history stores time-ordered summaries of what happened, such as milestones, decisions, and recent session outcomes.
+- Prompt assembly now uses a retrieval gate: it only injects semantic or episodic context when the task strongly suggests prior context is needed.
+
+Useful tools:
+
+- `search_memory(query)` for semantic facts
+- `search_episodes(query)` for time-ordered history
+- `remember_fact(name, content, category)` for durable facts
+- `log_episode(summary, title, tags)` for recent work history
+- `resume_context(query)` for combined semantic + episodic resume support
 
 ## Semantic recall
 
