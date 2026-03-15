@@ -1,173 +1,98 @@
 # Project Meridian
 
-> **The `.md` Operating System for AI Agents**
+Meridian is a local vector-backed runtime for agent state, retrieved operating context, and durable memory.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+The markdown brain has been removed. Runtime data now lives in `.meridian/meridian.sqlite3`, and the MCP server retrieves the most relevant operational documents and memory records directly from that store.
 
----
+## Architecture
 
-## What Is This?
+- SQLite stores runtime state, operational documents, and memory.
+- Each stored document is split into chunks, embedded into dense vectors, and indexed for hybrid retrieval.
+- Search combines vector similarity with SQLite FTS lexical ranking.
+- Prompt assembly is retrieval-driven instead of concatenating static markdown files.
+- Meridian now defaults to local `BAAI/bge-m3` embeddings via `sentence-transformers`.
+- OpenAI embeddings remain available as an explicit opt-in backend.
+- The deterministic hash embedder remains available as a lightweight fallback for tests or constrained environments.
+- Reindexing is selective: only documents affected by content or embedding-config changes are re-embedded.
 
-Project Meridian transforms any AI agent into **Meridian** — a customized, self-aware, memory-persistent AI entity with visible cognitive state and adjustable behavior parameters.
+## What the server exposes
 
-**The philosophy:**
-> Agents need **tight specification** and **mandatory structure** to behave consistently. Lazy prompts yield lazy code.
+- Shared runtime state for mode, sliders, focus, and system status
+- Hybrid search over operational documents
+- Hybrid search over durable memory
+- Memory write and append operations
+- Prompt assembly from the live store
 
-Instead of reinventing infrastructure, Meridian provides an **intelligence layer** via structured `.md` files that work with any AI model (Claude, GPT, Gemini, etc.).
+## Setup
 
----
-
-## 🛡️ Latent Integrity & Cognitive Safety (New in v1.0)
-
-Meridian is rigorously audited against **Latent Instability**, including:
-- **Speculation Labeling**: Enforced `[Fact]` vs `[Speculation]` tagging for all research.
-- **Latent Grounding**: Built-in safety protocols for "cursed inputs" and hallucination loops.
-- **Memory Gardening**: Automated pruning/consolidation rules to prevents "fossil layers" of outdated project data.
-
----
-
-## 🚀 Quick Start
-
-### Option 1: Drop-in (Easiest)
-1. Copy the `brain/` folder to your AI session
-2. Upload `brain/MASTER_SPEC.md` as the first file
-3. Start chatting — Meridian is now active
-
-### Option 2: Full Context
-Provide the entire `brain/` folder as context for maximum capability.
-
-### Option 3: Customize First
-1. Edit `brain/sliders/USER.md` with your preferences
-2. Adjust slider defaults in `brain/gauges/LIVEHUD.md`
-3. Then upload `brain/MASTER_SPEC.md`
-
----
-
-## What You Get
-
-### 📊 LiveHud Dashboard v1.0
-Every response starts with a visual cognitive state display featuring **Active Personality** verification:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  ◈ MERIDIAN LIVEHUD v1.0 ◈                                                  ║
-║  Session: Active  │  Mode: [Active Personality Name]                         ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║  ├─ 🔊 Verbosity      [████████░░░░░░░░░░░░]       40%       28%             ║
-║  ├─ 😂 Humor          [██████░░░░░░░░░░░░░░]       30%       45%             ║
-║  ├─ 🎨 Creativity     [████████████░░░░░░░░]       60%       55%             ║
-...
+```powershell
+python -m pip install -e .
 ```
 
-### 🎚️ Adjustable Sliders
-Control behavior in real-time with **Schema Mapping** for programmatic parsing:
-- `"Set creativity to 90%"`
-- `"Max directness"`
-- `"Research mode"` (preset adjustments)
+## Run
 
-### 🧠 Memory System
-Persistent context with **Auto-Gardening** to prevent logic drift across long-term sessions.
-
-### 🎭 Personality Modes
-Switch personalities on demand: Base, Research, Creative, Technical, Concise.
-
----
-
-## File Structure
-
-```
-Project Meridian/
-├── brain/                      ← THE PORTABLE OS (v1.0)
-│   ├── MASTER_SPEC.md          ← Entry point (load first)
-│   ├── COMPATIBILITY.md        ← Host capability matrix & fallbacks
-│   ├── audit_v2_latent_integrity.md ← Safety audit record
-│   ├── README.md               ← Quick reference
-│   ├── gauges/
-│   │   └── LIVEHUD.md          ← v1.0 Dashboard spec + Schema Mapping
-│   ├── sliders/                ← Cognitive parameters
-│   │   ├── HUMOR.md
-│   │   ├── CREATIVITY.md
-│   │   ├── DIRECTNESS.md
-│   │   ├── MORALITY.md
-│   │   ├── TECHNICALITY.md
-│   │   ├── SOUL.md             ← Includes Latent Grounding
-│   │   ├── TOOLS.md
-│   │   ├── USER.md             ← Customize for yourself
-│   │   └── IDENTITY.md
-│   ├── memory/
-│   │   ├── MEMORY_PROTOCOL.md  ← Includes Memory Gardening
-│   │   ├── RETRIEVAL.md
-│   │   ├── PERSISTENCE.md
-│   │   └── allmemories/        ← Where memories are stored
-│   ├── personalities/
-│   │   ├── BASE.md
-│   │   ├── RESEARCH_ANALYST.md ← Includes Speculation Labeling
-│   │   ├── CREATIVE_DIRECTOR.md
-│   │   └── TECHNICAL_COPILOT.md
-│   └── .agent/workflows/
-│       └── meridian-init.md
-├── LICENSE                     ← MIT
-├── CONTRIBUTING.md             ← How to contribute
-└── .gitignore
+```powershell
+python -m meridian_mcp.server
 ```
 
----
+Or:
 
-## Key Protocols
+```powershell
+python -m meridian_mcp.server --transport streamable-http --host 127.0.0.1 --port 8000
+```
 
-### The Completeness Doctrine
-Meridian addresses **every distinct point** in your input. No detail gets summarized away.
+## Dashboard
 
-### Receipts-Backed Protocol (Enhanced)
-All research claims include **Confidence Grading** (0.00 - 1.00) and **Claim Type** labeling.
+Run the local dashboard:
 
-### Verification Protocol
-Actions are verified, not assumed. No "latent space" execution.
+```powershell
+python -m meridian_mcp.dashboard
+```
 
-### Capability Handshake
-Meridian automatically detects host limitations (filesystem, web, tools) and applies fallbacks from `COMPATIBILITY.md`.
+Or:
 
-### 1-of-1 Identity
-Meridian isn't generic — it's configured specifically for *you*.
+```powershell
+meridian-dashboard
+```
 
----
+By default the dashboard is served at `http://127.0.0.1:8765` and manages a dedicated Meridian HTTP service at `http://127.0.0.1:8000/mcp`.
 
-## Customization
+The dashboard shows:
 
-### Adjust Your Profile
-Edit `brain/sliders/USER.md` with your preferences:
-- Communication style
-- Default slider values
-- Domain expertise
-- Technical context
+- Whether the managed Meridian service is running
+- Start and stop controls
+- Database file size and stored content size
+- The active embedding backend and model signature
+- Daily bytes added and daily bytes retrieved
+- A dynamic category map of stored documents
 
-### Add New Sliders
-Create new `.md` files in `brain/sliders/` following the template in `CONTRIBUTING.md`.
+Retrieval history is only available from the point this build started recording usage events.
 
-### Add Personality Modes
-Create new modes in `brain/personalities/` and reference them in `MASTER_SPEC.md`.
+## Storage
 
----
+- Local store path: `.meridian/meridian.sqlite3`
+- The store is ignored by git.
+- Seed operational documents are initialized automatically if the database does not exist.
 
-## Compatibility
+## Semantic recall
 
-Project Meridian is now **Host-Aware**. See `brain/COMPATIBILITY.md` for specific fallback behaviors across:
-- ✅ Claude / OpenAI / Gemini
-- ✅ Local Tool-Runners (Antigravity, OpenClaw)
-- ✅ Custom Frameworks
+- Default backend: `bge-m3`
+- Default local model: `BAAI/bge-m3`
+- Optional backend override: `MERIDIAN_EMBEDDING_BACKEND` with `bge-m3`, `openai`, or `hash`
+- Optional local-path override: `MERIDIAN_EMBEDDING_MODEL_PATH`
+- Optional BGE model override: `MERIDIAN_BGE_M3_MODEL`
+- Optional OpenAI model override: `MERIDIAN_OPENAI_EMBEDDING_MODEL`
+- Optional batch-size override: `MERIDIAN_EMBEDDING_BATCH_SIZE`
+- Optional max-length override: `MERIDIAN_EMBEDDING_MAX_LENGTH`
+- Optional FP16 override: `MERIDIAN_EMBEDDING_USE_FP16`
+- OpenAI-only options: `OPENAI_API_KEY`, `MERIDIAN_EMBEDDING_DIMENSIONS`
 
----
+`MERIDIAN_EMBEDDING_MODEL` is still accepted as a legacy override for whichever backend you explicitly select, but new setups should prefer the backend-specific variables above.
 
-## Contributing
+If you keep local models outside the default Hugging Face cache, point `MERIDIAN_EMBEDDING_MODEL_PATH` at your local `bge-m3` directory.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on extending the Meridian ecosystem.
+## Validation
 
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE)
-
----
-
-> *Project Meridian — Because the best agents are specified, not suggested.*
+```powershell
+python -m unittest discover -s tests -v
+```

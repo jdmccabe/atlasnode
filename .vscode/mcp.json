@@ -1,0 +1,17 @@
+{
+  "servers": {
+    "meridian-brain": {
+      "type": "stdio",
+      "command": "python",
+      "cwd": "${workspaceFolder}",
+      "args": ["-m", "meridian_mcp.server"],
+      "env": {},
+      "dev": {
+        "watch": "meridian_mcp/**/*.py",
+        "debug": {
+          "type": "debugpy"
+        }
+      }
+    }
+  }
+}

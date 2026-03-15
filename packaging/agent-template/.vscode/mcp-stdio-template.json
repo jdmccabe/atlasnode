@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "meridian-brain": {
+      "type": "stdio",
+      "command": "C:\\Path\\To\\Meridian-Windows-Package\\.venv\\Scripts\\python.exe",
+      "cwd": "C:\\Path\\To\\Meridian-Windows-Package",
+      "args": [
+        "-m",
+        "meridian_mcp.server"
+      ],
+      "env": {}
+    }
+  }
+}

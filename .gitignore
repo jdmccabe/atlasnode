@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+.meridian/
+.env
+.venv/
+build/
+dist/
+output/
+Meridian-Brain.lnk
+vecteezy_brain-human-with-infographic-line-style-icon_2482347.jpg

@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from zipfile import ZIP_STORED, ZipFile
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DIST_ROOT = REPO_ROOT / "dist"
+PACKAGE_NAME = "Meridian-Windows-Package"
+PACKAGE_ROOT = DIST_ROOT / PACKAGE_NAME
+MODEL_SOURCE = Path(
+    os.getenv(
+        "MERIDIAN_DISTRIBUTION_MODEL_SOURCE",
+        r"C:\Users\jdmcc\source\repos\AiModels\BAAI--bge-m3",
+    )
+)
+MODEL_TARGET = PACKAGE_ROOT / "models" / "BAAI--bge-m3"
+WHEELHOUSE_TARGET = PACKAGE_ROOT / "wheelhouse"
+
+COPY_ITEMS = [
+    "meridian_mcp",
+    "assets",
+    "LICENSE",
+    "README.md",
+    "MCP.md",
+    "pyproject.toml",
+]
+
+TEMPLATE_ITEMS = [
+    ("packaging/install-meridian.bat", "install-meridian.bat"),
+    ("packaging/run-meridian-dashboard.bat", "run-meridian-dashboard.bat"),
+    ("packaging/run-meridian-server.bat", "run-meridian-server.bat"),
+    ("packaging/START_HERE.md", "START_HERE.md"),
+    ("packaging/agent-template/README.md", "agent-template/README.md"),
+    ("packaging/agent-template/AGENTS.md", "agent-template/AGENTS.md"),
+    ("packaging/agent-template/.vscode/mcp-http.json", "agent-template/.vscode/mcp-http.json"),
+    ("packaging/agent-template/.vscode/mcp-stdio-template.json", "agent-template/.vscode/mcp-stdio-template.json"),
+    ("packaging/agent-template/.vscode/settings.json", "agent-template/.vscode/settings.json"),
+]
+
+
+def remove_existing(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def copy_item(source: Path, target: Path) -> None:
+    if source.is_dir():
+        shutil.copytree(
+            source,
+            target,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".git"),
+        )
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def copy_model(source: Path, target: Path) -> None:
+    if not source.exists():
+        raise FileNotFoundError(f"Bundled model source not found: {source}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        source,
+        target,
+        ignore=shutil.ignore_patterns(".cache", "imgs", "README.md", "long.jpg", ".gitattributes"),
+    )
+
+
+def write_env_files() -> None:
+    env_text = "\n".join(
+        [
+            "MERIDIAN_EMBEDDING_BACKEND=bge-m3",
+            "MERIDIAN_BGE_M3_MODEL=BAAI/bge-m3",
+            "",
+        ]
+    )
+    (PACKAGE_ROOT / ".env").write_text(env_text, encoding="utf-8")
+    (PACKAGE_ROOT / ".env.example").write_text(env_text, encoding="utf-8")
+
+
+def write_manifest() -> None:
+    manifest = {
+        "package_name": PACKAGE_NAME,
+        "repo_source": str(REPO_ROOT),
+        "model_source": str(MODEL_SOURCE),
+        "python_version": sys.version.split()[0],
+        "contents": {
+            "server_module": "meridian_mcp.server",
+            "dashboard_module": "meridian_mcp.dashboard",
+            "bundled_model": str(Path("models") / "BAAI--bge-m3"),
+            "wheelhouse": "wheelhouse",
+            "dashboard_launcher": "run-meridian-dashboard.bat",
+            "server_launcher": "run-meridian-server.bat",
+            "install_launcher": "install-meridian.bat",
+            "shortcut": "Meridian-Brain.lnk",
+            "agent_template": "agent-template",
+        },
+    }
+    (PACKAGE_ROOT / "package-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
+def build_wheelhouse() -> None:
+    remove_existing(WHEELHOUSE_TARGET)
+    WHEELHOUSE_TARGET.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            str(REPO_ROOT),
+            "--wheel-dir",
+            str(WHEELHOUSE_TARGET),
+        ],
+        check=True,
+        cwd=REPO_ROOT,
+    )
+
+
+def create_shortcut() -> None:
+    shortcut_path = PACKAGE_ROOT / "Meridian-Brain.lnk"
+    target_path = PACKAGE_ROOT / "run-meridian-dashboard.bat"
+    icon_path = PACKAGE_ROOT / "assets" / "meridian-brain-sunburst-icon.ico"
+    command = f"""
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut('{shortcut_path}')
+$shortcut.TargetPath = '{target_path}'
+$shortcut.WorkingDirectory = '{PACKAGE_ROOT}'
+$shortcut.IconLocation = '{icon_path}'
+$shortcut.Save()
+"""
+    subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        check=True,
+        cwd=REPO_ROOT,
+    )
+
+
+def create_zip_archive() -> Path:
+    zip_path = DIST_ROOT / f"{PACKAGE_NAME}.zip"
+    remove_existing(zip_path)
+    with ZipFile(zip_path, "w", compression=ZIP_STORED, allowZip64=True) as archive:
+        for path in PACKAGE_ROOT.rglob("*"):
+            archive.write(path, path.relative_to(PACKAGE_ROOT.parent))
+    return zip_path
+
+
+def main() -> None:
+    DIST_ROOT.mkdir(parents=True, exist_ok=True)
+    remove_existing(PACKAGE_ROOT)
+    PACKAGE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    for item in COPY_ITEMS:
+        copy_item(REPO_ROOT / item, PACKAGE_ROOT / item)
+
+    for source, target in TEMPLATE_ITEMS:
+        copy_item(REPO_ROOT / source, PACKAGE_ROOT / target)
+
+    copy_model(MODEL_SOURCE, MODEL_TARGET)
+    build_wheelhouse()
+    write_env_files()
+    write_manifest()
+    create_shortcut()
+    zip_path = create_zip_archive()
+
+    print(f"Built package folder: {PACKAGE_ROOT}")
+    print(f"Built package archive: {zip_path}")
+
+
+if __name__ == "__main__":
+    main()
