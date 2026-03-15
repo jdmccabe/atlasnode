@@ -1,10 +1,10 @@
-# Meridian Agent Template
+# AtlasNode Agent Template
 
-This workspace uses the `meridian-brain` MCP server as the authoritative source of Meridian runtime state, retrieved instructions, and durable memory.
+This workspace uses the `atlasnode-brain` MCP server as the authoritative source of AtlasNode runtime state, retrieved instructions, and durable memory.
 
 Startup contract:
 
-1. Connect to `meridian-brain`.
+1. Connect to `atlasnode-brain`.
 2. Call `get_brain_state`.
 3. If the mode is not `technical`, call `set_mode` with `technical`.
 4. Call `build_system_prompt`.
@@ -13,7 +13,7 @@ Startup contract:
 Behavioral rules:
 
 - Treat the vector-backed store as the source of truth for mode, sliders, focus, system status, and persistent memory.
-- Prefer Meridian MCP tools over repository files when the task is about current Meridian behavior or state.
+- Prefer AtlasNode MCP tools over repository files when the task is about current AtlasNode behavior or state.
 - Use a retrieval gate before consulting long-term context: search semantic memory for durable facts and preferences; search episodic history for recent events and progress.
 - If the user asks to change tone, mode, verbosity, or technical posture, update shared state through MCP tools.
 - Persist durable facts and preferences through `remember_fact`, `write_memory`, or `append_memory`.
@@ -34,3 +34,5 @@ Preferred MCP tools:
 - `write_memory`
 - `append_memory`
 - `log_episode`
+
+

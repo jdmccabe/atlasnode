@@ -10,15 +10,15 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from meridian_mcp.store import MeridianStore
+from atlasnode_mcp.store import AtlasNodeStore
 
 
-store = MeridianStore()
+store = AtlasNodeStore()
 
 mcp = FastMCP(
-    name="meridian-brain",
+    name="atlasnode-brain",
     instructions=(
-        "Use Meridian's SQLite hybrid vector store as the source of truth for runtime state, "
+        "Use AtlasNode's SQLite hybrid vector store as the source of truth for runtime state, "
         "instruction retrieval, and durable memory."
     ),
 )
@@ -44,41 +44,41 @@ def _search_response(query: str, doc_types: set[str], limit: int) -> list[dict[s
     ]
 
 
-@mcp.resource("meridian://master-spec")
+@mcp.resource("atlasnode://master-spec")
 def master_spec_resource() -> str:
     return _document_text("system/core")
 
 
-@mcp.resource("meridian://readme")
+@mcp.resource("atlasnode://readme")
 def brain_readme_resource() -> str:
     return _document_text("system/overview")
 
 
-@mcp.resource("meridian://state")
+@mcp.resource("atlasnode://state")
 def brain_state_resource() -> str:
     return json.dumps(store.state_response(), indent=2)
 
 
-@mcp.resource("meridian://document/{doc_id}")
+@mcp.resource("atlasnode://document/{doc_id}")
 def brain_document_resource(doc_id: str) -> str:
     return _document_text(doc_id)
 
 
 @mcp.tool()
 def list_brain_files() -> list[str]:
-    """List logical Meridian documents available in the vector store."""
+    """List logical AtlasNode documents available in the vector store."""
     return store.list_document_ids(include_memory=False)
 
 
 @mcp.tool()
 def read_brain_file(relative_path: str) -> str:
-    """Read a logical Meridian document by ID or legacy alias."""
+    """Read a logical AtlasNode document by ID or legacy alias."""
     return _document_text(relative_path)
 
 
 @mcp.tool()
 def search_brain(query: str) -> list[dict[str, str | int | float]]:
-    """Search non-memory Meridian documents using hybrid vector and lexical retrieval."""
+    """Search non-memory AtlasNode documents using hybrid vector and lexical retrieval."""
     return _search_response(query, {"system", "protocol", "profile", "mode"}, limit=10)
 
 
@@ -154,25 +154,25 @@ def resume_context(
 
 @mcp.tool()
 def get_brain_state() -> dict[str, Any]:
-    """Return the shared Meridian runtime state."""
+    """Return the shared AtlasNode runtime state."""
     return store.state_response()
 
 
 @mcp.tool()
 def set_mode(mode: str) -> dict[str, Any]:
-    """Set the active Meridian mode and apply its slider preset."""
+    """Set the active AtlasNode mode and apply its slider preset."""
     return store.set_mode(mode)
 
 
 @mcp.tool()
 def set_slider(slider: str, value: int) -> dict[str, Any]:
-    """Set a single slider in the shared Meridian runtime state."""
+    """Set a single slider in the shared AtlasNode runtime state."""
     return store.set_slider(slider, value)
 
 
 @mcp.tool()
 def reset_brain_state() -> dict[str, Any]:
-    """Reset the shared Meridian state to defaults."""
+    """Reset the shared AtlasNode state to defaults."""
     return store.reset_state()
 
 
@@ -198,7 +198,7 @@ def build_system_prompt(
     include_memory_summary: bool = True,
     memory_limit: int = 8,
 ) -> str:
-    """Build the canonical Meridian system prompt from the vector-backed store."""
+    """Build the canonical AtlasNode system prompt from the vector-backed store."""
     return store.build_system_prompt(
         task=task,
         include_memory_summary=include_memory_summary,
@@ -207,7 +207,7 @@ def build_system_prompt(
 
 
 @mcp.prompt()
-def activate_meridian(
+def activate_brain\(
     task: str | None = None,
     include_memory_summary: bool = True,
     memory_limit: int = 8,
@@ -220,7 +220,7 @@ def activate_meridian(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Meridian local MCP server.")
+    parser = argparse.ArgumentParser(description="Run the AtlasNode local MCP server.")
     parser.add_argument(
         "--transport",
         choices=("stdio", "sse", "streamable-http"),
@@ -251,3 +251,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

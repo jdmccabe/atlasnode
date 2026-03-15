@@ -21,16 +21,16 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 import uvicorn
 
-from meridian_mcp.store import DEFAULT_ANALYTICS_DAYS, MeridianStore
+from atlasnode_mcp.store import DEFAULT_ANALYTICS_DAYS, AtlasNodeStore
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
-MANAGED_SERVICE_HOST = os.getenv("MERIDIAN_MANAGED_HOST", "127.0.0.1")
-MANAGED_SERVICE_PORT = int(os.getenv("MERIDIAN_MANAGED_PORT", "8000"))
-DASHBOARD_PORT = int(os.getenv("MERIDIAN_DASHBOARD_PORT", "8765"))
-DASHBOARD_IDLE_TIMEOUT_SECONDS = int(os.getenv("MERIDIAN_DASHBOARD_IDLE_TIMEOUT_SECONDS", "20"))
+MANAGED_SERVICE_HOST = os.getenv("ATLASNODE_MANAGED_HOST", "127.0.0.1")
+MANAGED_SERVICE_PORT = int(os.getenv("ATLASNODE_MANAGED_PORT", "8000"))
+DASHBOARD_PORT = int(os.getenv("ATLASNODE_DASHBOARD_PORT", "8765"))
+DASHBOARD_IDLE_TIMEOUT_SECONDS = int(os.getenv("ATLASNODE_DASHBOARD_IDLE_TIMEOUT_SECONDS", "20"))
 DASHBOARD_BUILD = datetime.fromtimestamp(Path(__file__).stat().st_mtime, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -70,12 +70,12 @@ class ServiceStatus:
         }
 
 
-class MeridianServiceManager:
+class AtlasNodeServiceManager:
     def __init__(self, repo_root: Path, host: str, port: int) -> None:
         self.repo_root = repo_root
         self.host = host
         self.port = port
-        self.state_dir = self.repo_root / ".meridian"
+        self.state_dir = self.repo_root / ".atlasnode"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.pid_file = self.state_dir / "managed-service.json"
         self.log_file = self.state_dir / "managed-service.log"
@@ -131,7 +131,7 @@ class MeridianServiceManager:
             command_line = " ".join(process.cmdline())
         except psutil.Error:
             return None
-        if "meridian_mcp.server" not in command_line:
+        if "atlasnode_mcp.server" not in command_line:
             return None
         return process
 
@@ -144,9 +144,9 @@ class MeridianServiceManager:
         managed = managed_process is not None and managed_process.is_running()
         running = managed and listener_pid == managed_pid and reachable
 
-        detail = "Managed Meridian service is stopped."
+        detail = "Managed AtlasNode service is stopped."
         if running:
-            detail = "Managed Meridian service is running."
+            detail = "Managed AtlasNode service is running."
         elif reachable and listener_pid is not None and listener_pid != managed_pid:
             detail = "Port is in use by another process. Dashboard controls are unavailable until that process stops."
         elif managed and not reachable:
@@ -178,7 +178,7 @@ class MeridianServiceManager:
         command = [
             sys.executable,
             "-m",
-            "meridian_mcp.server",
+            "atlasnode_mcp.server",
             "--transport",
             "streamable-http",
             "--host",
@@ -298,7 +298,7 @@ class DashboardLifetimeManager:
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(target=self._watchdog, name="meridian-dashboard-watchdog", daemon=True)
+        self._thread = threading.Thread(target=self._watchdog, name="atlasnode-dashboard-watchdog", daemon=True)
         self._thread.start()
 
     def _watchdog(self) -> None:
@@ -308,8 +308,8 @@ class DashboardLifetimeManager:
                 os._exit(0)
 
 
-store = MeridianStore(repo_root=REPO_ROOT, data_root=REPO_ROOT / ".meridian")
-manager = MeridianServiceManager(REPO_ROOT, MANAGED_SERVICE_HOST, MANAGED_SERVICE_PORT)
+store = AtlasNodeStore(repo_root=REPO_ROOT, data_root=REPO_ROOT / ".atlasnode")
+manager = AtlasNodeServiceManager(REPO_ROOT, MANAGED_SERVICE_HOST, MANAGED_SERVICE_PORT)
 session_tracker = DashboardSessionTracker(DASHBOARD_IDLE_TIMEOUT_SECONDS)
 lifetime_manager = DashboardLifetimeManager(session_tracker)
 
@@ -384,7 +384,7 @@ app = Starlette(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Meridian dashboard.")
+    parser = argparse.ArgumentParser(description="Run the AtlasNode dashboard.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=DASHBOARD_PORT)
     args = parser.parse_args()
@@ -397,7 +397,7 @@ DASHBOARD_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Meridian Control</title>
+  <title>AtlasNode Control</title>
   <style>
     :root {
       --bg: #f4efe4;
@@ -747,16 +747,16 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="shell">
     <div class="hero">
       <section class="panel">
-        <div class="label">Meridian Control</div>
+        <div class="label">AtlasNode Control</div>
         <div class="hero-main">
           <div>
-            <h1 class="title">Meridian service dashboard</h1>
+            <h1 class="title">AtlasNode service dashboard</h1>
             <div class="status-line">
               <span id="status-dot" class="dot"></span>
               <strong id="status-text">Checking service...</strong>
             </div>
             <div id="build-stamp" class="subtle compact-note">UI build: loading...</div>
-            <div id="status-detail" class="subtle compact-note">Loading current Meridian status.</div>
+            <div id="status-detail" class="subtle compact-note">Loading current AtlasNode status.</div>
           </div>
           <div class="controls">
             <button id="start-button">Start</button>
@@ -781,7 +781,7 @@ DASHBOARD_HTML = """<!doctype html>
         <section class="panel card">
           <div class="label">Embedding</div>
           <div id="embedding-backend" class="stat">-</div>
-          <div id="embedding-summary" class="subtle">Waiting for Meridian state.</div>
+          <div id="embedding-summary" class="subtle">Waiting for AtlasNode state.</div>
         </section>
         <section class="panel card">
           <div class="label">Database File</div>
@@ -852,7 +852,7 @@ DASHBOARD_HTML = """<!doctype html>
     const startButton = document.getElementById("start-button");
     const stopButton = document.getElementById("stop-button");
     const refreshButton = document.getElementById("refresh-button");
-    const clientIdKey = "meridian_dashboard_client_id";
+    const clientIdKey = "atlasnode_dashboard_client_id";
     const clientId = (() => {
       const existing = window.localStorage.getItem(clientIdKey);
       if (existing) return existing;
@@ -1129,7 +1129,7 @@ DASHBOARD_HTML = """<!doctype html>
       const state = snapshot.state;
 
       document.getElementById("status-dot").className = service.running ? "dot live" : "dot";
-      document.getElementById("status-text").textContent = service.running ? "Meridian is running" : "Meridian is stopped";
+      document.getElementById("status-text").textContent = service.running ? "AtlasNode is running" : "AtlasNode is stopped";
       document.getElementById("build-stamp").textContent = `UI build: ${data.dashboard.build}`;
       document.getElementById("status-detail").textContent = service.detail;
       document.getElementById("service-url").textContent = service.service_url;
@@ -1222,4 +1222,6 @@ DASHBOARD_HTML = """<!doctype html>
 
 if __name__ == "__main__":
     main()
+
+
 

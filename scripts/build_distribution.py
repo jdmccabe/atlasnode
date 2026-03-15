@@ -11,11 +11,11 @@ from zipfile import ZIP_STORED, ZipFile
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_ROOT = REPO_ROOT / "dist"
-PACKAGE_NAME = "Meridian-Windows-Package"
+PACKAGE_NAME = "AtlasNode-Windows-Package"
 PACKAGE_ROOT = DIST_ROOT / PACKAGE_NAME
 MODEL_SOURCE = Path(
     os.getenv(
-        "MERIDIAN_DISTRIBUTION_MODEL_SOURCE",
+        "ATLASNODE_DISTRIBUTION_MODEL_SOURCE",
         r"C:\Users\jdmcc\source\repos\AiModels\BAAI--bge-m3",
     )
 )
@@ -23,7 +23,7 @@ MODEL_TARGET = PACKAGE_ROOT / "models" / "BAAI--bge-m3"
 WHEELHOUSE_TARGET = PACKAGE_ROOT / "wheelhouse"
 
 COPY_ITEMS = [
-    "meridian_mcp",
+    "atlasnode_mcp",
     "assets",
     "LICENSE",
     "README.md",
@@ -32,9 +32,9 @@ COPY_ITEMS = [
 ]
 
 TEMPLATE_ITEMS = [
-    ("packaging/install-meridian.bat", "install-meridian.bat"),
-    ("packaging/run-meridian-dashboard.bat", "run-meridian-dashboard.bat"),
-    ("packaging/run-meridian-server.bat", "run-meridian-server.bat"),
+    ("packaging/install-atlasnode.bat", "install-atlasnode.bat"),
+    ("packaging/run-atlasnode-dashboard.bat", "run-atlasnode-dashboard.bat"),
+    ("packaging/run-atlasnode-server.bat", "run-atlasnode-server.bat"),
     ("packaging/START_HERE.md", "START_HERE.md"),
     ("packaging/agent-template/README.md", "agent-template/README.md"),
     ("packaging/agent-template/AGENTS.md", "agent-template/AGENTS.md"),
@@ -77,8 +77,8 @@ def copy_model(source: Path, target: Path) -> None:
 def write_env_files() -> None:
     env_text = "\n".join(
         [
-            "MERIDIAN_EMBEDDING_BACKEND=bge-m3",
-            "MERIDIAN_BGE_M3_MODEL=BAAI/bge-m3",
+            "ATLASNODE_EMBEDDING_BACKEND=bge-m3",
+            "ATLASNODE_BGE_M3_MODEL=BAAI/bge-m3",
             "",
         ]
     )
@@ -93,14 +93,14 @@ def write_manifest() -> None:
         "model_source": str(MODEL_SOURCE),
         "python_version": sys.version.split()[0],
         "contents": {
-            "server_module": "meridian_mcp.server",
-            "dashboard_module": "meridian_mcp.dashboard",
+            "server_module": "atlasnode_mcp.server",
+            "dashboard_module": "atlasnode_mcp.dashboard",
             "bundled_model": str(Path("models") / "BAAI--bge-m3"),
             "wheelhouse": "wheelhouse",
-            "dashboard_launcher": "run-meridian-dashboard.bat",
-            "server_launcher": "run-meridian-server.bat",
-            "install_launcher": "install-meridian.bat",
-            "shortcut": "Meridian-Brain.lnk",
+            "dashboard_launcher": "run-atlasnode-dashboard.bat",
+            "server_launcher": "run-atlasnode-server.bat",
+            "install_launcher": "install-atlasnode.bat",
+            "shortcut": "AtlasNode.lnk",
             "agent_template": "agent-template",
         },
     }
@@ -126,9 +126,9 @@ def build_wheelhouse() -> None:
 
 
 def create_shortcut() -> None:
-    shortcut_path = PACKAGE_ROOT / "Meridian-Brain.lnk"
-    target_path = PACKAGE_ROOT / "run-meridian-dashboard.bat"
-    icon_path = PACKAGE_ROOT / "assets" / "meridian-brain-sunburst-icon.ico"
+    shortcut_path = PACKAGE_ROOT / "AtlasNode.lnk"
+    target_path = PACKAGE_ROOT / "run-atlasnode-dashboard.bat"
+    icon_path = PACKAGE_ROOT / "assets" / "atlasnode-brain-sunburst-icon.ico"
     command = f"""
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut('{shortcut_path}')
@@ -177,3 +177,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

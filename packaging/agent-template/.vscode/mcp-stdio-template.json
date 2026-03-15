@@ -1,14 +1,17 @@
 {
   "servers": {
-    "meridian-brain": {
+    "atlasnode-brain": {
       "type": "stdio",
-      "command": "C:\\Path\\To\\Meridian-Windows-Package\\.venv\\Scripts\\python.exe",
-      "cwd": "C:\\Path\\To\\Meridian-Windows-Package",
+      "command": "C:\\Path\\To\\AtlasNode-Windows-Package\\.venv\\Scripts\\python.exe",
+      "cwd": "C:\\Path\\To\\AtlasNode-Windows-Package",
       "args": [
         "-m",
-        "meridian_mcp.server"
+        "atlasnode_mcp.server"
       ],
       "env": {}
     }
   }
 }
+
+
+

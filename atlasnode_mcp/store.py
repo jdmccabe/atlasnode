@@ -27,7 +27,7 @@ HASH_VECTOR_DIMENSION = 384
 DEFAULT_EMBEDDING_BACKEND = "bge-m3"
 DEFAULT_BGE_M3_MODEL = "BAAI/bge-m3"
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-OPENAI_EMBEDDINGS_URL = os.getenv("MERIDIAN_EMBEDDINGS_URL", "https://api.openai.com/v1/embeddings")
+OPENAI_EMBEDDINGS_URL = os.getenv("ATLASNODE_EMBEDDINGS_URL", "https://api.openai.com/v1/embeddings")
 HASH_EMBEDDING_SIGNATURE = "local-hash-v1"
 DEFAULT_CHUNK_WORDS = 180
 DEFAULT_CHUNK_OVERLAP_WORDS = 40
@@ -49,7 +49,7 @@ ANALYTICS_STOPWORDS = {
     "into",
     "local",
     "memory",
-    "meridian",
+    "AtlasNode",
     "mode",
     "name",
     "note",
@@ -136,9 +136,9 @@ SEED_DOCUMENTS = (
     SeedDocument(
         doc_id="system/core",
         doc_type="system",
-        title="Meridian Core Runtime",
+        title="AtlasNode Core Runtime",
         content=(
-            "Meridian is a stateful AI runtime optimized for software work. The source of truth is the "
+            "AtlasNode is a stateful AI runtime optimized for software work. The source of truth is the "
             "vector-backed database and the live runtime state, not loose files. Favor direct answers, "
             "tool use, verification, and efficient context retrieval over ceremony or decorative prompts."
         ),
@@ -146,9 +146,9 @@ SEED_DOCUMENTS = (
     SeedDocument(
         doc_id="system/overview",
         doc_type="system",
-        title="Meridian Overview",
+        title="AtlasNode Overview",
         content=(
-            "Meridian stores runtime state, instruction documents, and durable memory in a single local "
+            "AtlasNode stores runtime state, instruction documents, and durable memory in a single local "
             "database. Prompt assembly is retrieval-driven: load current state, pull the active mode "
             "overlay, retrieve the most relevant operational documents, then retrieve the most relevant "
             "memory records for the task."
@@ -381,7 +381,7 @@ def _environment_value(name: str) -> str | None:
 
 
 def _embedding_backend() -> str:
-    backend = os.getenv("MERIDIAN_EMBEDDING_BACKEND", DEFAULT_EMBEDDING_BACKEND).strip().lower()
+    backend = os.getenv("ATLASNODE_EMBEDDING_BACKEND", DEFAULT_EMBEDDING_BACKEND).strip().lower()
     aliases = {
         "default": "bge-m3",
         "bge": "bge-m3",
@@ -394,25 +394,25 @@ def _embedding_backend() -> str:
     normalized = aliases.get(backend, backend)
     if normalized not in {"bge-m3", "openai", "hash"}:
         raise ValueError(
-            "MERIDIAN_EMBEDDING_BACKEND must be one of: bge-m3, openai, hash."
+            "ATLASNODE_EMBEDDING_BACKEND must be one of: bge-m3, openai, hash."
         )
     return normalized
 
 
 def _bge_m3_model_name() -> str:
-    explicit = os.getenv("MERIDIAN_BGE_M3_MODEL")
+    explicit = os.getenv("ATLASNODE_BGE_M3_MODEL")
     if explicit:
         return explicit.strip() or DEFAULT_BGE_M3_MODEL
 
-    legacy = os.getenv("MERIDIAN_EMBEDDING_MODEL")
-    if legacy and os.getenv("MERIDIAN_EMBEDDING_BACKEND", "").strip().lower() in {"bge", "bge-m3", "baai", "local"}:
+    legacy = os.getenv("ATLASNODE_EMBEDDING_MODEL")
+    if legacy and os.getenv("ATLASNODE_EMBEDDING_BACKEND", "").strip().lower() in {"bge", "bge-m3", "baai", "local"}:
         return legacy.strip() or DEFAULT_BGE_M3_MODEL
 
     return DEFAULT_BGE_M3_MODEL
 
 
 def _bge_m3_model_path() -> str | None:
-    raw = _environment_value("MERIDIAN_EMBEDDING_MODEL_PATH")
+    raw = _environment_value("ATLASNODE_EMBEDDING_MODEL_PATH")
     if not raw:
         return None
     return str(Path(raw).expanduser())
@@ -436,15 +436,15 @@ def _load_bge_m3_model() -> Any:
             sentence_transformers = importlib.import_module("sentence_transformers")
         except ModuleNotFoundError as exc:  # pragma: no cover - exercised via runtime failure path
             raise RuntimeError(
-                "sentence-transformers is required for MERIDIAN_EMBEDDING_BACKEND=bge-m3. "
-                "Install Meridian dependencies with `python -m pip install -e .`."
+                "sentence-transformers is required for ATLASNODE_EMBEDDING_BACKEND=bge-m3. "
+                "Install AtlasNode dependencies with `python -m pip install -e .`."
             ) from exc
 
         _BGE_M3_MODEL = sentence_transformers.SentenceTransformer(
             _bge_m3_model_source(),
             trust_remote_code=True,
         )
-        max_length = os.getenv("MERIDIAN_EMBEDDING_MAX_LENGTH")
+        max_length = os.getenv("ATLASNODE_EMBEDDING_MAX_LENGTH")
         if max_length:
             _BGE_M3_MODEL.max_seq_length = max(128, int(max_length))
         return _BGE_M3_MODEL
@@ -457,10 +457,10 @@ def _active_embedding_signature() -> str:
     if backend == "openai":
         api_key = _environment_value("OPENAI_API_KEY")
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for MERIDIAN_EMBEDDING_BACKEND=openai.")
-        dimensions = os.getenv("MERIDIAN_EMBEDDING_DIMENSIONS")
+            raise RuntimeError("OPENAI_API_KEY is required for ATLASNODE_EMBEDDING_BACKEND=openai.")
+        dimensions = os.getenv("ATLASNODE_EMBEDDING_DIMENSIONS")
         dimension_suffix = f":{dimensions}" if dimensions else ""
-        model = os.getenv("MERIDIAN_OPENAI_EMBEDDING_MODEL", os.getenv("MERIDIAN_EMBEDDING_MODEL", DEFAULT_OPENAI_EMBEDDING_MODEL))
+        model = os.getenv("ATLASNODE_OPENAI_EMBEDDING_MODEL", os.getenv("ATLASNODE_EMBEDDING_MODEL", DEFAULT_OPENAI_EMBEDDING_MODEL))
         return f"openai:{model}{dimension_suffix}"
     return HASH_EMBEDDING_SIGNATURE
 
@@ -470,12 +470,12 @@ def _openai_embed_texts(texts: list[str]) -> list[array]:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required for OpenAI embeddings.")
 
-    model = os.getenv("MERIDIAN_OPENAI_EMBEDDING_MODEL", os.getenv("MERIDIAN_EMBEDDING_MODEL", DEFAULT_OPENAI_EMBEDDING_MODEL))
+    model = os.getenv("ATLASNODE_OPENAI_EMBEDDING_MODEL", os.getenv("ATLASNODE_EMBEDDING_MODEL", DEFAULT_OPENAI_EMBEDDING_MODEL))
     payload: dict[str, Any] = {
         "input": texts,
         "model": model,
     }
-    dimensions = os.getenv("MERIDIAN_EMBEDDING_DIMENSIONS")
+    dimensions = os.getenv("ATLASNODE_EMBEDDING_DIMENSIONS")
     if dimensions:
         payload["dimensions"] = int(dimensions)
 
@@ -495,7 +495,7 @@ def _openai_embed_texts(texts: list[str]) -> list[array]:
 
 def _bge_m3_embed_texts(texts: list[str]) -> list[array]:
     model = _load_bge_m3_model()
-    batch_size = max(1, int(os.getenv("MERIDIAN_EMBEDDING_BATCH_SIZE", "8")))
+    batch_size = max(1, int(os.getenv("ATLASNODE_EMBEDDING_BATCH_SIZE", "8")))
     encoded = model.encode(
         texts,
         batch_size=batch_size,
@@ -520,11 +520,11 @@ def _embed_text(text: str) -> array:
 
 
 def _chunk_words() -> int:
-    return max(32, int(os.getenv("MERIDIAN_CHUNK_WORDS", str(DEFAULT_CHUNK_WORDS))))
+    return max(32, int(os.getenv("ATLASNODE_CHUNK_WORDS", str(DEFAULT_CHUNK_WORDS))))
 
 
 def _chunk_overlap_words() -> int:
-    overlap = int(os.getenv("MERIDIAN_CHUNK_OVERLAP_WORDS", str(DEFAULT_CHUNK_OVERLAP_WORDS)))
+    overlap = int(os.getenv("ATLASNODE_CHUNK_OVERLAP_WORDS", str(DEFAULT_CHUNK_OVERLAP_WORDS)))
     return max(0, min(overlap, _chunk_words() - 8))
 
 
@@ -628,11 +628,11 @@ def _memory_gate_reason(task: str | None) -> str | None:
     return None
 
 
-class MeridianStore:
+class AtlasNodeStore:
     def __init__(self, repo_root: Path | None = None, data_root: Path | None = None) -> None:
         self.repo_root = repo_root or Path(__file__).resolve().parent.parent
-        self.data_root = data_root or (self.repo_root / ".meridian")
-        self.db_path = self.data_root / "meridian.sqlite3"
+        self.data_root = data_root or (self.repo_root / ".atlasnode")
+        self.db_path = self.data_root / "atlasnode.sqlite3"
         self._initialize()
 
     @contextmanager
@@ -1531,7 +1531,7 @@ class MeridianStore:
             episode_lines = [f"- {match['id']}: {match['excerpt']}" for match in episode_matches]
 
         sections = [
-            "# Meridian runtime prompt",
+            "# AtlasNode runtime prompt",
             "",
             "## Runtime state",
             f"- mode: {state['mode']}",
@@ -1771,7 +1771,7 @@ class MeridianStore:
                     "daily_retrieved_bytes": daily_retrieved,
                     "retrieval_history_available": has_retrieval_history,
                     "retrieval_history_note": (
-                        "Retrieval history is only available from the point this Meridian build began logging usage events."
+                        "Retrieval history is only available from the point this AtlasNode build began logging usage events."
                     ),
                 },
                 "categories": self._category_summary(connection),
@@ -1780,3 +1780,4 @@ class MeridianStore:
                     "episodic": self.recent_episodes(limit=4, days=max(days, 7)),
                 },
             }
+

@@ -1,13 +1,13 @@
 {
   "servers": {
-    "meridian-brain": {
+    "atlasnode-brain": {
       "type": "stdio",
       "command": "python",
       "cwd": "${workspaceFolder}",
-      "args": ["-m", "meridian_mcp.server"],
+      "args": ["-m", "atlasnode_mcp.server"],
       "env": {},
       "dev": {
-        "watch": "meridian_mcp/**/*.py",
+        "watch": "atlasnode_mcp/**/*.py",
         "debug": {
           "type": "debugpy"
         }
@@ -15,3 +15,5 @@
     }
   }
 }
+
+

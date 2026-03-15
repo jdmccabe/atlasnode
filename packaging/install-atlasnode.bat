@@ -13,18 +13,18 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Creating Meridian virtual environment...
+echo Creating AtlasNode virtual environment...
 python -m venv ".venv"
 if errorlevel 1 exit /b 1
 
 :install
-echo Installing Meridian package and dependencies...
+echo Installing AtlasNode package and dependencies...
 call ".venv\Scripts\python.exe" -m pip install --upgrade pip
 if errorlevel 1 exit /b 1
 
 if exist "wheelhouse" (
   echo Installing from bundled wheelhouse...
-  call ".venv\Scripts\python.exe" -m pip install --no-index --find-links wheelhouse meridian-brain-mcp
+  call ".venv\Scripts\python.exe" -m pip install --no-index --find-links wheelhouse atlasnode-mcp
   if not errorlevel 1 goto installed
   echo Bundled wheelhouse install failed. Falling back to online install...
 )
@@ -34,7 +34,8 @@ if errorlevel 1 exit /b 1
 
 :installed
 
-echo Meridian install complete.
-echo Dashboard launcher: run-meridian-dashboard.bat
-echo Server launcher:    run-meridian-server.bat
+echo AtlasNode install complete.
+echo Dashboard launcher: run-atlasnode-dashboard.bat
+echo Server launcher:    run-atlasnode-server.bat
 endlocal
+

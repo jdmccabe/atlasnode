@@ -1,7 +1,7 @@
 [project]
-name = "meridian-brain-mcp"
+name = "atlasnode-mcp"
 version = "0.1.0"
-description = "Local MCP server for a SQLite hybrid vector-backed Meridian runtime."
+description = "Local MCP server for a SQLite hybrid vector-backed AtlasNode runtime."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -14,12 +14,14 @@ dependencies = [
 ]
 
 [project.scripts]
-meridian-dashboard = "meridian_mcp.dashboard:main"
-meridian-mcp = "meridian_mcp.server:main"
+atlasnode-dashboard = "atlasnode_mcp.dashboard:main"
+atlasnode-mcp = "atlasnode_mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["meridian_mcp*"]
+include = ["atlasnode_mcp*"]
+
+

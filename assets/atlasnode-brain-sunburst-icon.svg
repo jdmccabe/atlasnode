@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">Meridian brain to sunburst icon</title>
+  <title id="title">AtlasNode brain to sunburst icon</title>
   <desc id="desc">A stylized brain on the left transitions into a radial sunburst and network visualization on the right.</desc>
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -63,3 +63,4 @@
 
   <circle cx="256" cy="256" r="220" fill="none" stroke="rgba(77,60,35,0.12)" stroke-width="3"/>
 </svg>
+

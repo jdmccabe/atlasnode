@@ -1,6 +1,6 @@
-# Contributing to Project Meridian
+# Contributing to AtlasNode
 
-Thank you for your interest in contributing to Project Meridian! This document provides guidelines for contributing.
+Thank you for your interest in contributing to AtlasNode! This document provides guidelines for contributing.
 
 ---
 
@@ -155,4 +155,6 @@ Open an issue on GitHub for:
 
 ---
 
-> *Project Meridian is a collaborative effort. Your contributions make it better.*
+> *AtlasNode is a collaborative effort. Your contributions make it better.*
+
+

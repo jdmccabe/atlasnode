@@ -6,22 +6,22 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
-from meridian_mcp.store import MeridianStore, _active_embedding_signature, _embed_texts
+from atlasnode_mcp.store import AtlasNodeStore, _active_embedding_signature, _embed_texts
 
 
-class MeridianStoreTests(unittest.TestCase):
+class AtlasNodeStoreTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.env_patch = patch.dict(os.environ, {"MERIDIAN_EMBEDDING_BACKEND": "hash"}, clear=False)
+        self.env_patch = patch.dict(os.environ, {"ATLASNODE_EMBEDDING_BACKEND": "hash"}, clear=False)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         self.tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self.tempdir.cleanup)
         self.repo_root = Path(self.tempdir.name)
         self.repo_root.mkdir(parents=True, exist_ok=True)
-        self.windows_env_patch = patch("meridian_mcp.store._read_windows_environment_value", return_value=None)
+        self.windows_env_patch = patch("atlasnode_mcp.store._read_windows_environment_value", return_value=None)
         self.windows_env_patch.start()
         self.addCleanup(self.windows_env_patch.stop)
-        self.store = MeridianStore(repo_root=self.repo_root, data_root=self.repo_root / ".meridian")
+        self.store = AtlasNodeStore(repo_root=self.repo_root, data_root=self.repo_root / ".atlasnode")
 
     def test_store_initializes_seed_documents_and_state(self) -> None:
         state = self.store.state_response()
@@ -62,7 +62,7 @@ class MeridianStoreTests(unittest.TestCase):
     def test_build_system_prompt_uses_runtime_and_memory(self) -> None:
         self.store.write_memory(
             "preferred assistant name",
-            "Use the name Winston in Meridian-aware sessions.",
+            "Use the name Winston in AtlasNode-aware sessions.",
             overwrite=True,
         )
         prompt = self.store.build_system_prompt(
@@ -70,7 +70,7 @@ class MeridianStoreTests(unittest.TestCase):
             include_memory_summary=True,
             memory_limit=3,
         )
-        self.assertIn("Meridian runtime prompt", prompt)
+        self.assertIn("AtlasNode runtime prompt", prompt)
         self.assertIn("mode: technical", prompt)
         self.assertIn("Relevant memory", prompt)
         self.assertIn("Winston", prompt)
@@ -78,11 +78,11 @@ class MeridianStoreTests(unittest.TestCase):
     def test_build_system_prompt_keeps_memory_gate_closed_without_task_signal(self) -> None:
         self.store.write_memory(
             "preferred assistant name",
-            "Use the name Winston in Meridian-aware sessions.",
+            "Use the name Winston in AtlasNode-aware sessions.",
             overwrite=True,
         )
         prompt = self.store.build_system_prompt(
-            task="Explain how Meridian works.",
+            task="Explain how AtlasNode works.",
             include_memory_summary=True,
             memory_limit=3,
         )
@@ -92,7 +92,7 @@ class MeridianStoreTests(unittest.TestCase):
     def test_dashboard_snapshot_reports_storage_usage_and_categories(self) -> None:
         self.store.write_memory(
             "preferred assistant name",
-            "Use the name Winston in Meridian-aware sessions.",
+            "Use the name Winston in AtlasNode-aware sessions.",
             overwrite=True,
         )
         self.store.search_documents("Winston assistant", {"memory"}, limit=3)
@@ -149,13 +149,13 @@ class MeridianStoreTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "MERIDIAN_EMBEDDING_BACKEND": "bge-m3",
-                "MERIDIAN_EMBEDDING_MODEL_PATH": str(self.repo_root / "BAAI--bge-m3"),
+                "ATLASNODE_EMBEDDING_BACKEND": "bge-m3",
+                "ATLASNODE_EMBEDDING_MODEL_PATH": str(self.repo_root / "BAAI--bge-m3"),
             },
             clear=False,
         ):
             signature = _active_embedding_signature()
-            with patch("meridian_mcp.store._load_bge_m3_model", return_value=fake_model):
+            with patch("atlasnode_mcp.store._load_bge_m3_model", return_value=fake_model):
                 embeddings = _embed_texts(["first", "second"])
 
         self.assertIn("BAAI--bge-m3", signature)
@@ -176,15 +176,15 @@ class MeridianStoreTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "MERIDIAN_EMBEDDING_BACKEND": "openai",
+                "ATLASNODE_EMBEDDING_BACKEND": "openai",
                 "OPENAI_API_KEY": "test-key",
-                "MERIDIAN_EMBEDDING_MODEL": "text-embedding-3-small",
-                "MERIDIAN_EMBEDDING_DIMENSIONS": "256",
+                "ATLASNODE_EMBEDDING_MODEL": "text-embedding-3-small",
+                "ATLASNODE_EMBEDDING_DIMENSIONS": "256",
             },
             clear=False,
         ):
             signature = _active_embedding_signature()
-            with patch("meridian_mcp.store.httpx.post", return_value=fake_response) as mock_post:
+            with patch("atlasnode_mcp.store.httpx.post", return_value=fake_response) as mock_post:
                 embeddings = _embed_texts(["first", "second"])
 
         self.assertEqual(signature, "openai:text-embedding-3-small:256")
@@ -207,10 +207,10 @@ class MeridianStoreTests(unittest.TestCase):
             ]
         }
 
-        with patch.dict(os.environ, {"MERIDIAN_EMBEDDING_BACKEND": "openai"}, clear=True):
-            with patch("meridian_mcp.store._read_windows_environment_value", return_value="fallback-key"):
+        with patch.dict(os.environ, {"ATLASNODE_EMBEDDING_BACKEND": "openai"}, clear=True):
+            with patch("atlasnode_mcp.store._read_windows_environment_value", return_value="fallback-key"):
                 signature = _active_embedding_signature()
-                with patch("meridian_mcp.store.httpx.post", return_value=fake_response) as mock_post:
+                with patch("atlasnode_mcp.store.httpx.post", return_value=fake_response) as mock_post:
                     embeddings = _embed_texts(["first"])
 
         self.assertEqual(signature, "openai:text-embedding-3-small")
@@ -221,3 +221,4 @@ class MeridianStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
