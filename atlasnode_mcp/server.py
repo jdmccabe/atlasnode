@@ -13,7 +13,14 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from atlasnode_mcp.store import AtlasNodeStore
 
 
-store = AtlasNodeStore()
+store: AtlasNodeStore | None = None
+
+
+def _store() -> AtlasNodeStore:
+    global store
+    if store is None:
+        store = AtlasNodeStore()
+    return store
 
 mcp = FastMCP(
     name="atlasnode-brain",
@@ -25,7 +32,7 @@ mcp = FastMCP(
 
 
 def _document_text(identifier: str) -> str:
-    document = store.read_document(identifier)
+    document = _store().read_document(identifier)
     return document["content"]
 
 
@@ -38,7 +45,7 @@ def _search_response(
     namespace: str | None = None,
     include_global: bool = True,
 ) -> list[dict[str, Any]]:
-    matches = store.search_documents(
+    matches = _store().search_documents(
         query,
         doc_types,
         limit=limit,
@@ -72,7 +79,7 @@ def brain_readme_resource() -> str:
 
 @mcp.resource("atlasnode://state")
 def brain_state_resource() -> str:
-    return json.dumps(store.state_response(), indent=2)
+    return json.dumps(_store().state_response(), indent=2)
 
 
 @mcp.resource("atlasnode://document/{doc_id}")
@@ -83,7 +90,7 @@ def brain_document_resource(doc_id: str) -> str:
 @mcp.tool()
 def list_brain_files() -> list[str]:
     """List logical AtlasNode documents available in the vector store."""
-    return store.list_document_ids(include_memory=False)
+    return _store().list_document_ids(include_memory=False)
 
 
 @mcp.tool()
@@ -101,19 +108,19 @@ def search_brain(query: str) -> list[dict[str, str | int | float]]:
 @mcp.tool()
 def list_memories() -> list[str]:
     """List persisted memories from the vector store."""
-    return store.list_memories()
+    return _store().list_memories()
 
 
 @mcp.tool()
 def list_episodes(limit: int = 50) -> list[str]:
     """List recent episodic history records from the vector store."""
-    return store.list_episodes(limit=limit)
+    return _store().list_episodes(limit=limit)
 
 
 @mcp.tool()
 def list_procedures(limit: int = 50) -> list[str]:
     """List recent procedural memory records from the vector store."""
-    return store.list_procedures(limit=limit)
+    return _store().list_procedures(limit=limit)
 
 
 @mcp.tool()
@@ -182,7 +189,7 @@ def write_memory(
     namespace: str | None = None,
 ) -> str:
     """Write a durable memory record into the vector store."""
-    return store.write_memory(name, content, overwrite=overwrite, scope=scope, namespace=namespace)
+    return _store().write_memory(name, content, overwrite=overwrite, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
@@ -195,7 +202,7 @@ def remember_fact(
     namespace: str | None = None,
 ) -> str:
     """Write or update a semantic fact memory with an optional category."""
-    return store.remember_fact(
+    return _store().remember_fact(
         name,
         content,
         category=category,
@@ -208,7 +215,7 @@ def remember_fact(
 @mcp.tool()
 def append_memory(name: str, content: str, scope: str = "global", namespace: str | None = None) -> str:
     """Append to an existing memory record or create it if missing."""
-    return store.append_memory(name, content, scope=scope, namespace=namespace)
+    return _store().append_memory(name, content, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
@@ -220,7 +227,7 @@ def log_episode(
     namespace: str | None = None,
 ) -> str:
     """Log a time-ordered episodic summary for recent work, decisions, or session outcomes."""
-    return store.log_episode(summary, title=title, tags=tags, scope=scope, namespace=namespace)
+    return _store().log_episode(summary, title=title, tags=tags, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
@@ -232,7 +239,7 @@ def remember_procedure(
     namespace: str | None = None,
 ) -> str:
     """Write or update a reusable procedural instruction for future tasks."""
-    return store.remember_procedure(
+    return _store().remember_procedure(
         name,
         instruction,
         overwrite=overwrite,
@@ -250,7 +257,7 @@ def recent_episodes(
     include_global: bool = True,
 ) -> list[dict[str, Any]]:
     """Return recent episodic history records ordered by recency."""
-    return store.recent_episodes(
+    return _store().recent_episodes(
         limit=limit,
         days=days,
         scope=scope,
@@ -270,7 +277,7 @@ def resume_context(
     include_global: bool = True,
 ) -> dict[str, Any]:
     """Return combined semantic and episodic context for resuming work."""
-    return store.resume_context(
+    return _store().resume_context(
         query=query,
         memory_limit=memory_limit,
         episode_limit=episode_limit,
@@ -292,7 +299,7 @@ def latest_project_status(
     include_global: bool = True,
 ) -> dict[str, Any]:
     """Return the strongest current project facts plus recent episodes for vague status or next-step prompts."""
-    return store.latest_project_status(
+    return _store().latest_project_status(
         query=query,
         semantic_limit=semantic_limit,
         episode_limit=episode_limit,
@@ -310,49 +317,49 @@ def queue_background_extraction(
     namespace: str | None = None,
 ) -> int:
     """Queue conversation or session text for background memory extraction."""
-    return store.queue_background_extraction(source_text, scope=scope, namespace=namespace)
+    return _store().queue_background_extraction(source_text, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
 def process_pending_extractions(limit: int = 5) -> list[dict[str, Any]]:
     """Process queued background extraction jobs into semantic, procedural, and episodic memory."""
-    return store.process_pending_extractions(limit=limit)
+    return _store().process_pending_extractions(limit=limit)
 
 
 @mcp.tool()
 def retry_failed_extractions(limit: int = 20) -> int:
     """Move failed extraction jobs back to the queue so they can be retried."""
-    return store.retry_failed_extractions(limit=limit)
+    return _store().retry_failed_extractions(limit=limit)
 
 
 @mcp.tool()
 def get_brain_state() -> dict[str, Any]:
     """Return the shared AtlasNode runtime state."""
-    return store.state_response()
+    return _store().state_response()
 
 
 @mcp.tool()
 def set_mode(mode: str) -> dict[str, Any]:
     """Set the active AtlasNode mode and apply its slider preset."""
-    return store.set_mode(mode)
+    return _store().set_mode(mode)
 
 
 @mcp.tool()
 def set_slider(slider: str, value: int) -> dict[str, Any]:
     """Set a single slider in the shared AtlasNode runtime state."""
-    return store.set_slider(slider, value)
+    return _store().set_slider(slider, value)
 
 
 @mcp.tool()
 def reset_brain_state() -> dict[str, Any]:
     """Reset the shared AtlasNode state to defaults."""
-    return store.reset_state()
+    return _store().reset_state()
 
 
 @mcp.tool()
 def update_focus(present: str, past: str | None = None, future: str | None = None) -> dict[str, Any]:
     """Update the shared focus fields used by the current runtime state."""
-    return store.update_focus(present=present, past=past, future=future)
+    return _store().update_focus(present=present, past=past, future=future)
 
 
 @mcp.tool()
@@ -362,7 +369,7 @@ def set_system_state(
     vibe: str | None = None,
 ) -> dict[str, Any]:
     """Update shared system-state fields."""
-    return store.set_system_state(context=context, tools=tools, vibe=vibe)
+    return _store().set_system_state(context=context, tools=tools, vibe=vibe)
 
 
 @mcp.tool()
@@ -372,7 +379,7 @@ def build_system_prompt(
     memory_limit: int = 8,
 ) -> str:
     """Build the canonical AtlasNode system prompt from the vector-backed store."""
-    return store.build_system_prompt(
+    return _store().build_system_prompt(
         task=task,
         include_memory_summary=include_memory_summary,
         memory_limit=memory_limit,
