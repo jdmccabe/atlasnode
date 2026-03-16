@@ -111,6 +111,12 @@ def list_episodes(limit: int = 50) -> list[str]:
 
 
 @mcp.tool()
+def list_procedures(limit: int = 50) -> list[str]:
+    """List recent procedural memory records from the vector store."""
+    return store.list_procedures(limit=limit)
+
+
+@mcp.tool()
 def search_memory(
     query: str,
     limit: int = 10,
@@ -141,6 +147,25 @@ def search_episodes(
     return _search_response(
         query,
         {"episode"},
+        limit=limit,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
+    )
+
+
+@mcp.tool()
+def search_procedures(
+    query: str,
+    limit: int = 10,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
+    """Search procedural memory records using hybrid vector and lexical retrieval."""
+    return _search_response(
+        query,
+        {"procedure"},
         limit=limit,
         scope=scope,
         namespace=namespace,
@@ -196,6 +221,24 @@ def log_episode(
 ) -> str:
     """Log a time-ordered episodic summary for recent work, decisions, or session outcomes."""
     return store.log_episode(summary, title=title, tags=tags, scope=scope, namespace=namespace)
+
+
+@mcp.tool()
+def remember_procedure(
+    name: str,
+    instruction: str,
+    overwrite: bool = True,
+    scope: str = "global",
+    namespace: str | None = None,
+) -> str:
+    """Write or update a reusable procedural instruction for future tasks."""
+    return store.remember_procedure(
+        name,
+        instruction,
+        overwrite=overwrite,
+        scope=scope,
+        namespace=namespace,
+    )
 
 
 @mcp.tool()
@@ -258,6 +301,28 @@ def latest_project_status(
         namespace=namespace,
         include_global=include_global,
     )
+
+
+@mcp.tool()
+def queue_background_extraction(
+    source_text: str,
+    scope: str = "global",
+    namespace: str | None = None,
+) -> int:
+    """Queue conversation or session text for background memory extraction."""
+    return store.queue_background_extraction(source_text, scope=scope, namespace=namespace)
+
+
+@mcp.tool()
+def process_pending_extractions(limit: int = 5) -> list[dict[str, Any]]:
+    """Process queued background extraction jobs into semantic, procedural, and episodic memory."""
+    return store.process_pending_extractions(limit=limit)
+
+
+@mcp.tool()
+def retry_failed_extractions(limit: int = 20) -> int:
+    """Move failed extraction jobs back to the queue so they can be retried."""
+    return store.retry_failed_extractions(limit=limit)
 
 
 @mcp.tool()

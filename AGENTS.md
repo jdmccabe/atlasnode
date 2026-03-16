@@ -26,6 +26,7 @@ Per-message decision loop:
 - If recall is needed, choose the tool deliberately:
   - Use `search_memory` for durable facts, preferences, project details, identity, and stable technical context.
   - Use `search_episodes` for recent events, progress, prior sessions, decisions over time, or questions like "what did we do last time?"
+  - Use `search_procedures` for reusable workflows, operating rules, build/verification steps, and other recurring how-to guidance.
   - Use `resume_context` for vague resume-style prompts such as "what should I do next?", "where did we leave off?", or "start the next phase."
   - Use `latest_project_status` when the user asks for the current status, next steps, or project direction and you want the strongest project facts plus recent work history together.
   - When context belongs to a specific user, workspace, or thread, pass `scope` and `namespace` so recall stays targeted instead of searching the full shared pool.
@@ -48,7 +49,9 @@ Memory write rules:
 - Use stable topic names with `remember_fact` so future `overwrite=True` calls update the same fact instead of creating near-duplicates.
 - Use scoped writes when the fact only applies to one workspace, one user, or one thread.
 - Prefer `log_episode` when the information is a dated event, milestone, handoff note, outcome, or recent decision.
+- Prefer `remember_procedure` when the information is reusable workflow guidance, an operating rule, or a recurring build/verification sequence.
 - If a new fact supersedes an older one, overwrite the existing fact for that topic instead of creating a near-duplicate.
+- If a whole conversation or session may contain several useful memories, queue it for background extraction instead of trying to write every possible memory synchronously.
 - If the user asks for something repeatedly, remember it.
 - If you repeatedly fail at a specific type of task, remember the correction if it is likely to help later.
 - If a task was very difficult but had a relatively simple final solution, remember that solution pattern.
@@ -77,11 +80,15 @@ Preferred MCP tools:
 - `set_system_state`
 - `search_memory`
 - `search_episodes`
+- `search_procedures`
 - `resume_context`
 - `latest_project_status`
 - `remember_fact`
+- `remember_procedure`
 - `write_memory`
 - `append_memory`
 - `log_episode`
+- `queue_background_extraction`
+- `process_pending_extractions`
 
 

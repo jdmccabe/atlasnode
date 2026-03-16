@@ -355,6 +355,22 @@ async def api_stop(_: Request) -> JSONResponse:
         return JSONResponse({"error": _format_exception(exc), "service": manager.status().to_dict()}, status_code=500)
 
 
+async def api_process_queue(_: Request) -> JSONResponse:
+    try:
+        processed = store.process_pending_extractions(limit=8)
+        return JSONResponse({"processed": processed, "count": len(processed), "snapshot": _dashboard_payload()["snapshot"]})
+    except Exception as exc:
+        return JSONResponse({"error": _format_exception(exc)}, status_code=500)
+
+
+async def api_retry_failed(_: Request) -> JSONResponse:
+    try:
+        retried = store.retry_failed_extractions(limit=20)
+        return JSONResponse({"retried": retried, "snapshot": _dashboard_payload()["snapshot"]})
+    except Exception as exc:
+        return JSONResponse({"error": _format_exception(exc)}, status_code=500)
+
+
 async def api_heartbeat(request: Request) -> JSONResponse:
     payload = await request.json()
     client_id = str(payload.get("client_id", "")).strip()
@@ -378,6 +394,8 @@ app = Starlette(
         Route("/api/status", api_status),
         Route("/api/service/start", api_start, methods=["POST"]),
         Route("/api/service/stop", api_stop, methods=["POST"]),
+        Route("/api/extractions/process", api_process_queue, methods=["POST"]),
+        Route("/api/extractions/retry-failed", api_retry_failed, methods=["POST"]),
         Route("/api/session/heartbeat", api_heartbeat, methods=["POST"]),
         Route("/api/session/unregister", api_unregister, methods=["POST"]),
     ]
@@ -645,7 +663,7 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 10px;
       margin-top: 10px;
       min-height: 0;
-      grid-template-rows: minmax(0, 1fr) minmax(72px, auto);
+      grid-template-rows: repeat(3, minmax(0, 1fr));
     }
     .context-block {
       border-radius: 14px;
@@ -799,6 +817,19 @@ DASHBOARD_HTML = """<!doctype html>
           <div id="document-count" class="stat">-</div>
           <div id="memory-count" class="subtle"></div>
         </section>
+        <section class="panel card">
+          <div class="label">Memory Health</div>
+          <div class="mini-list">
+            <div class="mini-row"><span>Procedures</span><span id="procedure-count">-</span></div>
+            <div class="mini-row"><span>Queued jobs</span><span id="queue-count">-</span></div>
+            <div class="mini-row"><span>Rejected facts</span><span id="reject-count">-</span></div>
+            <div class="mini-row"><span>Processed jobs</span><span id="processed-count">-</span></div>
+          </div>
+          <div class="controls">
+            <button id="process-queue-button" class="secondary">Process Queue</button>
+            <button id="retry-failed-button" class="secondary">Retry Failed</button>
+          </div>
+        </section>
       </div>
 
       <section class="panel category-panel">
@@ -822,6 +853,13 @@ DASHBOARD_HTML = """<!doctype html>
               <span id="episodic-count" class="context-badge">-</span>
             </div>
             <div id="episodic-list" class="context-list"></div>
+          </div>
+          <div class="context-block">
+            <div class="context-heading">
+              <strong>Procedural memory</strong>
+              <span id="procedural-count" class="context-badge">-</span>
+            </div>
+            <div id="procedural-list" class="context-list"></div>
           </div>
         </div>
       </section>
@@ -853,6 +891,8 @@ DASHBOARD_HTML = """<!doctype html>
     const startButton = document.getElementById("start-button");
     const stopButton = document.getElementById("stop-button");
     const refreshButton = document.getElementById("refresh-button");
+    const processQueueButton = document.getElementById("process-queue-button");
+    const retryFailedButton = document.getElementById("retry-failed-button");
     const clientIdKey = "atlasnode_dashboard_client_id";
     const clientId = (() => {
       const existing = window.localStorage.getItem(clientIdKey);
@@ -892,6 +932,8 @@ DASHBOARD_HTML = """<!doctype html>
       startButton.disabled = isBusy;
       stopButton.disabled = isBusy;
       refreshButton.disabled = isBusy;
+      processQueueButton.disabled = isBusy;
+      retryFailedButton.disabled = isBusy;
     }
 
     function renderBreakdown(breakdown) {
@@ -1144,15 +1186,27 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById("stored-bytes").textContent = formatBytes(storage.stored_content_bytes);
       document.getElementById("stored-meta").textContent = `${storage.breakdown.length} groups`;
       document.getElementById("document-count").textContent = String(storage.document_count);
-      document.getElementById("memory-count").textContent = `${storage.memory_count} memory records • ${storage.episode_count} episodes`;
+      document.getElementById("memory-count").textContent = `${storage.memory_count} memory records | ${storage.episode_count} episodes`;
+      document.getElementById("procedure-count").textContent = String(storage.procedure_count || 0);
+      const queue = snapshot.health.queue || {};
+      const queueLabel = queue.oldest_queued_seconds
+        ? `${queue.queued || 0} (${Math.round(queue.oldest_queued_seconds / 60)}m oldest)`
+        : String(queue.queued || 0);
+      document.getElementById("queue-count").textContent = queueLabel;
+      document.getElementById("reject-count").textContent = `${snapshot.health.admission_rejections || 0} / ${snapshot.health.extractions_failed || 0} failed`;
+      document.getElementById("processed-count").textContent = `${snapshot.health.extractions_processed || 0} (${snapshot.health.extractions_retried || 0} retried)`;
       document.getElementById("semantic-count").textContent = `${snapshot.recent_context.semantic.length} shown`;
       document.getElementById("episodic-count").textContent = `${snapshot.recent_context.episodic.length} shown`;
+      document.getElementById("procedural-count").textContent = `${snapshot.recent_context.procedural.length} shown`;
+      processQueueButton.textContent = queue.worker_enabled ? "Process Queue" : "Process Queue (Manual)";
+      retryFailedButton.textContent = `Retry Failed (${queue.failed || 0})`;
 
       renderBreakdown(storage.breakdown);
       renderUsageChart(snapshot.usage);
       renderCategories(snapshot.categories);
       renderContextList("semantic-list", snapshot.recent_context.semantic, "No semantic memories yet.");
       renderContextList("episodic-list", snapshot.recent_context.episodic, "No recent episodes yet.", "created_at");
+      renderContextList("procedural-list", snapshot.recent_context.procedural, "No procedural memories yet.");
     }
 
     async function refresh() {
@@ -1180,6 +1234,8 @@ DASHBOARD_HTML = """<!doctype html>
     startButton.addEventListener("click", () => invoke("/api/service/start"));
     stopButton.addEventListener("click", () => invoke("/api/service/stop"));
     refreshButton.addEventListener("click", refresh);
+    processQueueButton.addEventListener("click", () => invoke("/api/extractions/process"));
+    retryFailedButton.addEventListener("click", () => invoke("/api/extractions/retry-failed"));
 
     async function sendHeartbeat() {
       try {

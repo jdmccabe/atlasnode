@@ -11,7 +11,11 @@ from atlasnode_mcp.store import AtlasNodeStore, _active_embedding_signature, _em
 
 class AtlasNodeStoreTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.env_patch = patch.dict(os.environ, {"ATLASNODE_EMBEDDING_BACKEND": "hash"}, clear=False)
+        self.env_patch = patch.dict(
+            os.environ,
+            {"ATLASNODE_EMBEDDING_BACKEND": "hash", "ATLASNODE_EXTRACTION_WORKER": "0"},
+            clear=False,
+        )
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         self.tempdir = tempfile.TemporaryDirectory()
@@ -103,9 +107,13 @@ class AtlasNodeStoreTests(unittest.TestCase):
         self.assertIn("categories", snapshot)
         self.assertGreater(snapshot["storage"]["db_file_bytes"], 0)
         self.assertGreaterEqual(snapshot["storage"]["memory_count"], 1)
+        self.assertIn("procedure_count", snapshot["storage"])
         self.assertTrue(snapshot["usage"]["daily_added_bytes"])
         self.assertTrue(snapshot["usage"]["daily_retrieved_bytes"])
         self.assertTrue(any(category["id"] == "memory" for category in snapshot["categories"]))
+        self.assertIn("health", snapshot)
+        self.assertIn("queue", snapshot["health"])
+        self.assertIn("procedural", snapshot["recent_context"])
 
     def test_remember_fact_stores_semantic_metadata(self) -> None:
         memory_id = self.store.remember_fact(
@@ -288,6 +296,104 @@ class AtlasNodeStoreTests(unittest.TestCase):
         )
         self.assertEqual(status["recent_episodes"][0]["metadata"]["namespace"], "atlasnode")
         self.assertIsNotNone(status["recommended_focus"])
+
+    def test_remember_procedure_and_search_procedures(self) -> None:
+        procedure_id = self.store.remember_procedure(
+            "dashboard release flow",
+            "Before packaging AtlasNode, rerun tests and rebuild the Windows distribution.",
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        self.assertEqual(procedure_id, "procedure/dashboard_release_flow")
+
+        matches = self.store.search_documents(
+            "rebuild windows distribution before packaging",
+            {"procedure"},
+            limit=3,
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        self.assertTrue(matches)
+        self.assertEqual(matches[0]["id"], procedure_id)
+        self.assertEqual(matches[0]["metadata"]["kind"], "procedural")
+
+    def test_background_extraction_queues_and_processes_memory_candidates(self) -> None:
+        job_id = self.store.queue_background_extraction(
+            (
+                "The user prefers BGE-M3 for local embeddings. "
+                "Before packaging AtlasNode, rerun tests and rebuild the Windows distribution. "
+                "We finished the memory-scope refactor and verified the test suite."
+            ),
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        self.assertGreater(job_id, 0)
+
+        processed = self.store.process_pending_extractions(limit=5)
+        self.assertTrue(any(item["job_id"] == job_id for item in processed))
+
+        memory_matches = self.store.search_documents(
+            "BGE-M3 local embeddings",
+            {"memory"},
+            limit=5,
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        procedure_matches = self.store.search_documents(
+            "rerun tests rebuild windows distribution",
+            {"procedure"},
+            limit=5,
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        episode_matches = self.store.search_documents(
+            "finished scope refactor verified test suite",
+            {"episode"},
+            limit=5,
+            scope="workspace",
+            namespace="atlasnode",
+        )
+
+        self.assertTrue(memory_matches)
+        self.assertTrue(procedure_matches)
+        self.assertTrue(episode_matches)
+
+    def test_retry_failed_extractions_requeues_failed_jobs(self) -> None:
+        with self.store._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO extraction_jobs (source_text, scope, namespace, status, result_json, created_at, processed_at)
+                VALUES (?, ?, ?, 'failed', ?, ?, ?)
+                """,
+                (
+                    "Before packaging AtlasNode, rerun tests.",
+                    "workspace",
+                    "atlasnode",
+                    '{"error":"simulated"}',
+                    "2026-03-15T12:00:00Z",
+                    "2026-03-15T12:01:00Z",
+                ),
+            )
+
+        retried = self.store.retry_failed_extractions(limit=5)
+        self.assertEqual(retried, 1)
+
+        snapshot = self.store.dashboard_snapshot(days=14)
+        self.assertGreaterEqual(snapshot["health"]["extractions_retried"], 1)
+        self.assertGreaterEqual(snapshot["health"]["queue"]["queued"], 1)
+
+    def test_build_system_prompt_includes_relevant_procedures(self) -> None:
+        self.store.remember_procedure(
+            "dashboard verification flow",
+            "Before modifying the AtlasNode dashboard, capture a screenshot and rerun the UI tests.",
+        )
+        prompt = self.store.build_system_prompt(
+            task="Update the AtlasNode dashboard layout safely.",
+            include_memory_summary=True,
+            memory_limit=4,
+        )
+        self.assertIn("protocol/procedures", prompt)
+        self.assertIn("Relevant procedures", prompt)
 
     def test_log_episode_and_resume_context_return_recent_history(self) -> None:
         episode_id = self.store.log_episode(

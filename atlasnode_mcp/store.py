@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Any, Iterable
 
 import httpx
@@ -32,6 +32,8 @@ HASH_EMBEDDING_SIGNATURE = "local-hash-v1"
 DEFAULT_CHUNK_WORDS = 180
 DEFAULT_CHUNK_OVERLAP_WORDS = 40
 DEFAULT_ANALYTICS_DAYS = 14
+DEFAULT_EXTRACTION_POLL_SECONDS = float(os.getenv("ATLASNODE_EXTRACTION_POLL_SECONDS", "8"))
+EXTRACTION_WORKER_ENABLED = os.getenv("ATLASNODE_EXTRACTION_WORKER", "1").strip().lower() not in {"0", "false", "off", "no"}
 ANALYTICS_STOPWORDS = {
     "about",
     "after",
@@ -234,6 +236,17 @@ SEED_DOCUMENTS = (
             "Keep episodic history separate from semantic memory. Episodic records capture time-ordered summaries "
             "of what happened, such as decisions, milestones, or session outcomes. Use episodic history for questions "
             "like what changed recently, what we did yesterday, or where work left off."
+        ),
+    ),
+    SeedDocument(
+        doc_id="protocol/procedures",
+        doc_type="protocol",
+        title="Procedural Memory Protocol",
+        content=(
+            "Keep procedural memory separate from semantic facts and episodic history. Procedural records capture "
+            "reusable instructions, workflows, and preferred operating rules such as how to build, verify, package, "
+            "or respond in a recurring context. Prefer procedural memory for stable how-to guidance that should "
+            "shape future behavior."
         ),
     ),
     SeedDocument(
@@ -446,6 +459,27 @@ def _metadata_scope_rank(
     return 0
 
 
+def _scope_sql_clause(
+    *,
+    scope: str | None,
+    namespace: str | None,
+    include_global: bool,
+    table_alias: str = "d",
+) -> tuple[str, list[Any]]:
+    if scope is None:
+        return "", []
+    normalized_scope = _normalize_memory_scope(scope)
+    normalized_namespace = _normalize_namespace(namespace)
+    exact_clause = (
+        f"{table_alias}.doc_scope = ? AND "
+        f"(({table_alias}.doc_namespace IS NULL AND ? IS NULL) OR {table_alias}.doc_namespace = ?)"
+    )
+    params: list[Any] = [normalized_scope, normalized_namespace, normalized_namespace]
+    if include_global:
+        return f" AND (({exact_clause}) OR {table_alias}.doc_scope = 'global')", params
+    return f" AND ({exact_clause})", params
+
+
 def _is_low_value_fact(name: str, content: str, category: str) -> str | None:
     normalized_content = " ".join(content.strip().split())
     if not normalized_content:
@@ -460,6 +494,26 @@ def _is_low_value_fact(name: str, content: str, category: str) -> str | None:
     if _slugify(name) == _slugify(normalized_content) and token_count < 6:
         return "fact duplicates its title without enough detail"
     return None
+
+
+def _token_overlap(left: str, right: str) -> float:
+    left_tokens = set(_tokenize(left))
+    right_tokens = set(_tokenize(right))
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _sentence_chunks(text: str) -> list[str]:
+    pieces = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+    return [piece.strip(" -") for piece in pieces if piece and piece.strip(" -")]
+
+
+def _title_from_text(text: str, fallback: str) -> str:
+    tokens = _tokenize(text)
+    if not tokens:
+        return fallback
+    return " ".join(tokens[:8]).strip().title() or fallback
 
 
 def _tokenize(text: str) -> list[str]:
@@ -788,7 +842,10 @@ class AtlasNodeStore:
         self.repo_root = repo_root or Path(__file__).resolve().parent.parent
         self.data_root = data_root or (self.repo_root / ".atlasnode")
         self.db_path = self.data_root / "atlasnode.sqlite3"
+        self._extraction_stop = Event()
+        self._extraction_worker: Thread | None = None
         self._initialize()
+        self._start_extraction_worker_if_enabled()
 
     @contextmanager
     def _connect(self) -> sqlite3.Connection:
@@ -814,6 +871,8 @@ class AtlasNodeStore:
                     content TEXT NOT NULL,
                     source TEXT NOT NULL,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
+                    doc_scope TEXT NOT NULL DEFAULT 'global',
+                    doc_namespace TEXT,
                     embedding BLOB NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -821,7 +880,6 @@ class AtlasNodeStore:
 
                 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(doc_type);
                 CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at DESC);
-
                 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
                     doc_id UNINDEXED,
                     title,
@@ -880,8 +938,34 @@ class AtlasNodeStore:
 
                 CREATE INDEX IF NOT EXISTS idx_usage_events_type ON usage_events(event_type);
                 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred_at ON usage_events(occurred_at DESC);
+
+                CREATE TABLE IF NOT EXISTS extraction_jobs (
+                    job_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_text TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'global',
+                    namespace TEXT,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    processed_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_extraction_jobs_status ON extraction_jobs(status, created_at);
                 """
             )
+
+            document_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+            }
+            if "doc_scope" not in document_columns:
+                connection.execute("ALTER TABLE documents ADD COLUMN doc_scope TEXT NOT NULL DEFAULT 'global'")
+            if "doc_namespace" not in document_columns:
+                connection.execute("ALTER TABLE documents ADD COLUMN doc_namespace TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_documents_scope ON documents(doc_type, doc_scope, doc_namespace, updated_at DESC)"
+            )
+            self._sync_document_scope_columns(connection)
 
             state_row = connection.execute("SELECT singleton FROM runtime_state WHERE singleton = 1").fetchone()
             if state_row is None:
@@ -913,6 +997,23 @@ class AtlasNodeStore:
                 self._sync_seed_documents(connection)
                 self._sync_embeddings(connection)
 
+    def _start_extraction_worker_if_enabled(self) -> None:
+        if not EXTRACTION_WORKER_ENABLED or self._extraction_worker is not None:
+            return
+        self._extraction_worker = Thread(
+            target=self._extraction_worker_loop,
+            name="atlasnode-extraction-worker",
+            daemon=True,
+        )
+        self._extraction_worker.start()
+
+    def _extraction_worker_loop(self) -> None:
+        while not self._extraction_stop.wait(DEFAULT_EXTRACTION_POLL_SECONDS):
+            try:
+                self.process_pending_extractions(limit=4)
+            except Exception:
+                continue
+
     def _sync_seed_documents(self, connection: sqlite3.Connection) -> None:
         for document in SEED_DOCUMENTS:
             self._upsert_document(
@@ -924,6 +1025,28 @@ class AtlasNodeStore:
                 source=document.source,
                 metadata={},
                 track_write_event=False,
+            )
+
+    def _sync_document_scope_columns(self, connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT doc_id, metadata_json
+            FROM documents
+            """
+        ).fetchall()
+        for row in rows:
+            metadata = json.loads(row["metadata_json"])
+            connection.execute(
+                """
+                UPDATE documents
+                SET doc_scope = ?, doc_namespace = ?
+                WHERE doc_id = ?
+                """,
+                (
+                    _normalize_memory_scope(str(metadata.get("scope") or "global")),
+                    _normalize_namespace(metadata.get("namespace")),
+                    row["doc_id"],
+                ),
             )
 
     def default_state(self) -> dict[str, Any]:
@@ -1041,6 +1164,8 @@ class AtlasNodeStore:
     ) -> None:
         now = _utc_now()
         embedding = _embedding_to_bytes(_embed_text(f"{title}\n{content}"))
+        doc_scope = _normalize_memory_scope(str(metadata.get("scope") or "global"))
+        doc_namespace = _normalize_namespace(metadata.get("namespace"))
         existing = connection.execute(
             "SELECT created_at, title, content, doc_type FROM documents WHERE doc_id = ?",
             (doc_id,),
@@ -1052,14 +1177,18 @@ class AtlasNodeStore:
         current_bytes = _byte_length(title.strip()) + _byte_length(content.strip())
         connection.execute(
             """
-            INSERT INTO documents (doc_id, doc_type, title, content, source, metadata_json, embedding, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (
+                doc_id, doc_type, title, content, source, metadata_json, doc_scope, doc_namespace, embedding, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(doc_id) DO UPDATE SET
                 doc_type = excluded.doc_type,
                 title = excluded.title,
                 content = excluded.content,
                 source = excluded.source,
                 metadata_json = excluded.metadata_json,
+                doc_scope = excluded.doc_scope,
+                doc_namespace = excluded.doc_namespace,
                 embedding = excluded.embedding,
                 updated_at = excluded.updated_at
             """,
@@ -1070,6 +1199,8 @@ class AtlasNodeStore:
                 content.strip(),
                 source,
                 json.dumps(metadata, sort_keys=True),
+                doc_scope,
+                doc_namespace,
                 embedding,
                 created_at,
                 now,
@@ -1256,12 +1387,22 @@ class AtlasNodeStore:
         query: str,
         doc_types: set[str],
         limit: int,
+        *,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
     ) -> dict[str, float]:
         tokens = _tokenize(query)
         if not tokens:
             return {}
         match_query = " OR ".join(dict.fromkeys(tokens))
         placeholders = ", ".join("?" for _ in doc_types)
+        scope_clause, scope_params = _scope_sql_clause(
+            scope=scope,
+            namespace=namespace,
+            include_global=include_global,
+            table_alias="d",
+        )
         rows = connection.execute(
             f"""
             SELECT c.chunk_id, bm25(document_chunks_fts) AS rank
@@ -1270,10 +1411,11 @@ class AtlasNodeStore:
             JOIN documents AS d ON d.doc_id = c.doc_id
             WHERE document_chunks_fts MATCH ?
               AND d.doc_type IN ({placeholders})
+              {scope_clause}
             ORDER BY rank
             LIMIT ?
             """,
-            (match_query, *sorted(doc_types), limit),
+            (match_query, *sorted(doc_types), *scope_params, limit),
         ).fetchall()
         scores: dict[str, float] = {}
         for row in rows:
@@ -1301,8 +1443,22 @@ class AtlasNodeStore:
 
         query_embedding = _embed_text(normalized_query)
         with self._connect() as connection:
-            lexical_scores = self._fts_scores(connection, normalized_query, type_set, max(limit * 10, 20))
+            lexical_scores = self._fts_scores(
+                connection,
+                normalized_query,
+                type_set,
+                max(limit * 10, 20),
+                scope=scope,
+                namespace=namespace,
+                include_global=include_global,
+            )
             placeholders = ", ".join("?" for _ in type_set)
+            scope_clause, scope_params = _scope_sql_clause(
+                scope=scope,
+                namespace=namespace,
+                include_global=include_global,
+                table_alias="d",
+            )
             rows = connection.execute(
                 f"""
                 SELECT
@@ -1317,8 +1473,9 @@ class AtlasNodeStore:
                 FROM document_chunks AS c
                 JOIN documents AS d ON d.doc_id = c.doc_id
                 WHERE d.doc_type IN ({placeholders})
+                  {scope_clause}
                 """,
-                tuple(sorted(type_set)),
+                (*tuple(sorted(type_set)), *scope_params),
             ).fetchall()
 
             aggregated: dict[str, dict[str, Any]] = {}
@@ -1396,6 +1553,20 @@ class AtlasNodeStore:
             ).fetchall()
             return [row["doc_id"] for row in rows]
 
+    def list_procedures(self, limit: int = 50) -> list[str]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT doc_id
+                FROM documents
+                WHERE doc_type = 'procedure'
+                ORDER BY updated_at DESC, doc_id
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+            return [row["doc_id"] for row in rows]
+
     def latest_memories(
         self,
         limit: int,
@@ -1410,8 +1581,20 @@ class AtlasNodeStore:
                 SELECT doc_id, title, content, metadata_json, created_at, updated_at
                 FROM documents
                 WHERE doc_type = 'memory'
+                  {scope_clause}
                 ORDER BY updated_at DESC, doc_id
-                """,
+                """.replace("{scope_clause}", _scope_sql_clause(
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                    table_alias="documents",
+                )[0]),
+                _scope_sql_clause(
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                    table_alias="documents",
+                )[1],
             ).fetchall()
             memories: list[dict[str, Any]] = []
             for row in rows:
@@ -1457,10 +1640,21 @@ class AtlasNodeStore:
                 SELECT doc_id, title, content, metadata_json, created_at, updated_at
                 FROM documents
                 WHERE doc_type = 'episode' AND updated_at >= ?
+                  {scope_clause}
                 ORDER BY updated_at DESC, doc_id
                 LIMIT ?
-                """,
-                (cutoff_iso, max(1, limit)),
+                """.replace("{scope_clause}", _scope_sql_clause(
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                    table_alias="documents",
+                )[0]),
+                (cutoff_iso, *_scope_sql_clause(
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                    table_alias="documents",
+                )[1], max(1, limit)),
             ).fetchall()
             episodes: list[dict[str, Any]] = []
             for row in rows:
@@ -1485,6 +1679,59 @@ class AtlasNodeStore:
                 if len(episodes) >= max(1, limit):
                     break
             return episodes
+
+    def latest_procedures(
+        self,
+        limit: int = 8,
+        *,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT doc_id, title, content, metadata_json, created_at, updated_at
+                FROM documents
+                WHERE doc_type = 'procedure'
+                  {scope_clause}
+                ORDER BY updated_at DESC, doc_id
+                """.replace("{scope_clause}", _scope_sql_clause(
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                    table_alias="documents",
+                )[0]),
+                _scope_sql_clause(
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                    table_alias="documents",
+                )[1],
+            ).fetchall()
+            procedures: list[dict[str, Any]] = []
+            for row in rows:
+                metadata = json.loads(row["metadata_json"])
+                if _metadata_scope_rank(
+                    metadata,
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                ) <= 0:
+                    continue
+                procedures.append(
+                    {
+                        "id": row["doc_id"],
+                        "title": row["title"],
+                        "excerpt": _excerpt(row["content"], row["title"]),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "metadata": metadata,
+                    }
+                )
+                if len(procedures) >= max(1, limit):
+                    break
+            return procedures
 
     def write_memory(
         self,
@@ -1522,6 +1769,63 @@ class AtlasNodeStore:
             self._save_state(connection, state)
             return memory_id
 
+    def _fact_admission_decision(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        name: str,
+        content: str,
+        category: str,
+        scope: str,
+        namespace: str | None,
+        existing_id: str | None,
+    ) -> tuple[bool, int, str]:
+        normalized_content = " ".join(content.strip().split())
+        token_count = len(_tokenize(normalized_content))
+        score = 0
+        reasons: list[str] = []
+        if category != "general":
+            score += 2
+            reasons.append("specific category")
+        if token_count >= 8:
+            score += 2
+            reasons.append("detailed content")
+        elif token_count >= 5:
+            score += 1
+            reasons.append("moderate detail")
+        if len(normalized_content) >= 48:
+            score += 1
+            reasons.append("high information density")
+
+        scope_clause, scope_params = _scope_sql_clause(
+            scope=scope,
+            namespace=namespace,
+            include_global=False,
+            table_alias="documents",
+        )
+        rows = connection.execute(
+            """
+            SELECT doc_id, title, content
+            FROM documents
+            WHERE doc_type = 'memory'
+              {scope_clause}
+            ORDER BY updated_at DESC
+            LIMIT 25
+            """.replace("{scope_clause}", scope_clause),
+            scope_params,
+        ).fetchall()
+        for row in rows:
+            if existing_id is not None and row["doc_id"] == existing_id:
+                continue
+            overlap = _token_overlap(f"{name} {normalized_content}", f"{row['title']} {row['content']}")
+            if overlap >= 0.9:
+                return False, score, f"near-duplicate of {row['doc_id']}"
+            if overlap >= 0.72:
+                score -= 2
+        if score < 2:
+            return False, score, "admission score too low"
+        return True, score, ", ".join(reasons) or "accepted"
+
     def remember_fact(
         self,
         name: str,
@@ -1537,10 +1841,23 @@ class AtlasNodeStore:
         normalized_scope = _normalize_memory_scope(scope)
         normalized_namespace = _normalize_namespace(namespace)
         rejection_reason = _is_low_value_fact(name, content, normalized_category)
-        if rejection_reason is not None:
-            raise ValueError(f"Fact was not stored: {rejection_reason}.")
         memory_id = f"memory/{fact_key}"
         with self._connect() as connection:
+            if rejection_reason is not None:
+                self._record_usage_event(
+                    connection,
+                    "admission_rejected",
+                    _byte_length(content),
+                    doc_id=memory_id,
+                    doc_type="memory",
+                    metadata={
+                        "reason": rejection_reason,
+                        "category": normalized_category,
+                        "scope": normalized_scope,
+                        "namespace": normalized_namespace,
+                    },
+                )
+                raise ValueError(f"Fact was not stored: {rejection_reason}.")
             existing = connection.execute(
                 "SELECT doc_id, content, metadata_json FROM documents WHERE doc_id = ?",
                 (memory_id,),
@@ -1558,6 +1875,39 @@ class AtlasNodeStore:
                     )
                 if existing["content"].strip() == content.strip() and existing_metadata.get("category") == normalized_category:
                     return memory_id
+            admitted, admission_score, admission_reason = self._fact_admission_decision(
+                connection,
+                name=name,
+                content=content,
+                category=normalized_category,
+                scope=normalized_scope,
+                namespace=normalized_namespace,
+                existing_id=memory_id if existing is not None else None,
+            )
+            if not admitted:
+                self._record_usage_event(
+                    connection,
+                    "admission_rejected",
+                    _byte_length(content),
+                    doc_id=memory_id,
+                    doc_type="memory",
+                    metadata={
+                        "reason": admission_reason,
+                        "category": normalized_category,
+                        "scope": normalized_scope,
+                        "namespace": normalized_namespace,
+                    },
+                )
+                raise ValueError(f"Fact was not stored: {admission_reason}.")
+            semantic_metadata = _semantic_metadata(
+                name,
+                normalized_category,
+                scope=normalized_scope,
+                namespace=normalized_namespace,
+                existing=existing_metadata,
+            )
+            semantic_metadata["admission_score"] = admission_score
+            semantic_metadata["admission_reason"] = admission_reason
 
             self._upsert_document(
                 connection=connection,
@@ -1566,13 +1916,7 @@ class AtlasNodeStore:
                 title=name.strip(),
                 content=content,
                 source="memory",
-                metadata=_semantic_metadata(
-                    name,
-                    normalized_category,
-                    scope=normalized_scope,
-                    namespace=normalized_namespace,
-                    existing=existing_metadata,
-                ),
+                metadata=semantic_metadata,
             )
 
             state = self._row_to_state(
@@ -1582,6 +1926,55 @@ class AtlasNodeStore:
             state["focus"]["past"] = f"Stored semantic memory {memory_id}"
             self._save_state(connection, state)
             return memory_id
+
+    def remember_procedure(
+        self,
+        name: str,
+        instruction: str,
+        *,
+        overwrite: bool = True,
+        scope: str = "global",
+        namespace: str | None = None,
+    ) -> str:
+        procedure_id = f"procedure/{_slugify(name)}"
+        normalized_scope = _normalize_memory_scope(scope)
+        normalized_namespace = _normalize_namespace(namespace)
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT doc_id, metadata_json FROM documents WHERE doc_id = ?",
+                (procedure_id,),
+            ).fetchone()
+            if existing is not None and not overwrite:
+                raise FileExistsError(f"Procedure already exists: {procedure_id}")
+            existing_metadata = json.loads(existing["metadata_json"]) if existing is not None else None
+            version = 1
+            if existing_metadata and existing_metadata.get("kind") == "procedural":
+                version = int(existing_metadata.get("procedure_version") or 0) + 1
+            metadata = _memory_metadata(
+                "procedural",
+                scope=normalized_scope,
+                namespace=normalized_namespace,
+                procedure_key=_slugify(name),
+                procedure_status="active",
+                procedure_version=version,
+            )
+            self._upsert_document(
+                connection=connection,
+                doc_id=procedure_id,
+                doc_type="procedure",
+                title=name.strip(),
+                content=instruction,
+                source="procedure",
+                metadata=metadata,
+            )
+
+            state = self._row_to_state(
+                connection.execute("SELECT * FROM runtime_state WHERE singleton = 1").fetchone()
+            )
+            state["pending_writes"] = 0
+            state["focus"]["past"] = f"Stored procedural memory {procedure_id}"
+            self._save_state(connection, state)
+            return procedure_id
 
     def append_memory(
         self,
@@ -1776,6 +2169,195 @@ class AtlasNodeStore:
             "namespace": _normalize_namespace(namespace),
         }
 
+    def queue_background_extraction(
+        self,
+        source_text: str,
+        *,
+        scope: str = "global",
+        namespace: str | None = None,
+    ) -> int:
+        normalized_text = source_text.strip()
+        if not normalized_text:
+            raise ValueError("Background extraction source text must not be empty.")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO extraction_jobs (source_text, scope, namespace, status, result_json, created_at, processed_at)
+                VALUES (?, ?, ?, 'queued', '{}', ?, NULL)
+                RETURNING job_id
+                """,
+                (
+                    normalized_text,
+                    _normalize_memory_scope(scope),
+                    _normalize_namespace(namespace),
+                    _utc_now(),
+                ),
+            ).fetchone()
+            return int(row["job_id"])
+
+    def _extract_background_candidates(self, source_text: str) -> dict[str, list[dict[str, Any]]]:
+        facts: list[dict[str, Any]] = []
+        procedures: list[dict[str, Any]] = []
+        episodes: list[dict[str, Any]] = []
+        for sentence in _sentence_chunks(source_text):
+            lowered = sentence.lower()
+            if any(token in lowered for token in ("prefer ", "prefers ", "preferred ", "likes ", "uses ")):
+                facts.append(
+                    {
+                        "name": _title_from_text(sentence, "Captured preference"),
+                        "content": sentence,
+                        "category": "preference" if "prefer" in lowered or "likes " in lowered else "project_detail",
+                    }
+                )
+            if any(token in lowered for token in ("always ", "never ", "before ", "after ", "when ", "should ", "must ")):
+                procedures.append(
+                    {
+                        "name": _title_from_text(sentence, "Captured procedure"),
+                        "instruction": sentence,
+                    }
+                )
+            if any(token in lowered for token in ("finished", "completed", "implemented", "decided", "shipped", "verified")):
+                episodes.append(
+                    {
+                        "title": _title_from_text(sentence, "Captured episode"),
+                        "summary": sentence,
+                    }
+                )
+        return {"facts": facts[:4], "procedures": procedures[:4], "episodes": episodes[:4]}
+
+    def process_pending_extractions(self, limit: int = 5) -> list[dict[str, Any]]:
+        processed: list[dict[str, Any]] = []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id, source_text, scope, namespace
+                FROM extraction_jobs
+                WHERE status = 'queued'
+                ORDER BY created_at ASC, job_id ASC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+        for row in rows:
+            with self._connect() as connection:
+                claimed = connection.execute(
+                    """
+                    UPDATE extraction_jobs
+                    SET status = 'processing'
+                    WHERE job_id = ? AND status = 'queued'
+                    """,
+                    (row["job_id"],),
+                )
+                if claimed.rowcount == 0:
+                    continue
+            source_text = row["source_text"]
+            scope = row["scope"]
+            namespace = row["namespace"]
+            try:
+                candidates = self._extract_background_candidates(source_text)
+                writes: list[dict[str, Any]] = []
+                for fact in candidates["facts"]:
+                    try:
+                        memory_id = self.remember_fact(
+                            fact["name"],
+                            fact["content"],
+                            category=fact["category"],
+                            overwrite=True,
+                            scope=scope,
+                            namespace=namespace,
+                        )
+                        writes.append({"kind": "semantic", "id": memory_id})
+                    except ValueError:
+                        continue
+                for procedure in candidates["procedures"]:
+                    procedure_id = self.remember_procedure(
+                        procedure["name"],
+                        procedure["instruction"],
+                        overwrite=True,
+                        scope=scope,
+                        namespace=namespace,
+                    )
+                    writes.append({"kind": "procedural", "id": procedure_id})
+                for episode in candidates["episodes"]:
+                    episode_id = self.log_episode(
+                        episode["summary"],
+                        title=episode["title"],
+                        scope=scope,
+                        namespace=namespace,
+                    )
+                    writes.append({"kind": "episodic", "id": episode_id})
+                result = {"writes": writes, "candidate_counts": {key: len(value) for key, value in candidates.items()}}
+                with self._connect() as connection:
+                    connection.execute(
+                        """
+                        UPDATE extraction_jobs
+                        SET status = 'processed', result_json = ?, processed_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (json.dumps(result, sort_keys=True), _utc_now(), row["job_id"]),
+                    )
+                    self._record_usage_event(
+                        connection,
+                        "extraction_processed",
+                        _byte_length(source_text),
+                        metadata={
+                            "job_id": int(row["job_id"]),
+                            "writes": len(writes),
+                            "scope": scope,
+                            "namespace": namespace,
+                        },
+                    )
+                processed.append({"job_id": int(row["job_id"]), **result})
+            except Exception as exc:
+                with self._connect() as connection:
+                    connection.execute(
+                        """
+                        UPDATE extraction_jobs
+                        SET status = 'failed', result_json = ?, processed_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (json.dumps({"error": str(exc)}, sort_keys=True), _utc_now(), row["job_id"]),
+                    )
+                    self._record_usage_event(
+                        connection,
+                        "extraction_failed",
+                        _byte_length(source_text),
+                        metadata={"job_id": int(row["job_id"]), "error": str(exc)},
+                    )
+        return processed
+
+    def retry_failed_extractions(self, limit: int = 20) -> int:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id
+                FROM extraction_jobs
+                WHERE status = 'failed'
+                ORDER BY created_at ASC, job_id ASC
+                LIMIT ?
+                """,
+                (max(1, limit),),
+            ).fetchall()
+            if not rows:
+                return 0
+            job_ids = [int(row["job_id"]) for row in rows]
+            placeholders = ", ".join("?" for _ in job_ids)
+            connection.execute(
+                f"""
+                UPDATE extraction_jobs
+                SET status = 'queued', result_json = '{{}}', processed_at = NULL
+                WHERE job_id IN ({placeholders})
+                """,
+                tuple(job_ids),
+            )
+            self._record_usage_event(
+                connection,
+                "extraction_retried",
+                len(job_ids),
+                metadata={"job_ids": job_ids},
+            )
+            return len(job_ids)
+
     def reset_state(self) -> dict[str, Any]:
         with self._connect() as connection:
             state = self.default_state()
@@ -1861,6 +2443,7 @@ class AtlasNodeStore:
         if include_memory_summary:
             core_ids.append("protocol/memory")
             core_ids.append("protocol/episodes")
+            core_ids.append("protocol/procedures")
 
         core_documents = [self.read_document(doc_id) for doc_id in core_ids]
 
@@ -1872,6 +2455,10 @@ class AtlasNodeStore:
 
         memory_lines: list[str] = []
         episode_lines: list[str] = []
+        procedure_lines: list[str] = []
+        if include_memory_summary and task:
+            procedure_matches = self.search_documents(task, {"procedure"}, limit=max(3, min(memory_limit, 5)))
+            procedure_lines = [f"- {match['id']}: {match['excerpt']}" for match in procedure_matches]
         if include_memory_summary and task and gate_reason:
             memory_matches = self.search_documents(task, {"memory"}, limit=memory_limit)
             memory_lines = [f"- {match['id']}: {match['excerpt']}" for match in memory_matches]
@@ -1940,6 +2527,8 @@ class AtlasNodeStore:
             sections.extend(["## Relevant memory", *memory_lines, ""])
         if episode_lines:
             sections.extend(["## Relevant episodic history", *episode_lines, ""])
+        if procedure_lines:
+            sections.extend(["## Relevant procedures", *procedure_lines, ""])
 
         prompt = "\n".join(sections).strip() + "\n"
         with self._connect() as connection:
@@ -1990,6 +2579,51 @@ class AtlasNodeStore:
             (days,),
         ).fetchall()
         return {row["day"]: int(row["total_bytes"] or 0) for row in rows}
+
+    def _event_count(self, connection: sqlite3.Connection, event_type: str, days: int) -> int:
+        cutoff = datetime.now(UTC).timestamp() - (max(1, days) * 86400)
+        cutoff_iso = datetime.fromtimestamp(cutoff, UTC).isoformat().replace("+00:00", "Z")
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM usage_events
+            WHERE event_type = ? AND occurred_at >= ?
+            """,
+            (event_type, cutoff_iso),
+        ).fetchone()
+        return int(row["count"] or 0)
+
+    def _queue_health(self, connection: sqlite3.Connection) -> dict[str, Any]:
+        queue_rows = connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM extraction_jobs
+            GROUP BY status
+            """
+        ).fetchall()
+        counts = {row["status"]: int(row["count"] or 0) for row in queue_rows}
+        oldest = connection.execute(
+            """
+            SELECT created_at
+            FROM extraction_jobs
+            WHERE status = 'queued'
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        oldest_seconds = None
+        if oldest is not None:
+            created = datetime.fromisoformat(str(oldest["created_at"]).replace("Z", "+00:00"))
+            oldest_seconds = max(0, int((datetime.now(UTC) - created).total_seconds()))
+        return {
+            "queued": counts.get("queued", 0),
+            "processing": counts.get("processing", 0),
+            "processed": counts.get("processed", 0),
+            "failed": counts.get("failed", 0),
+            "oldest_queued_seconds": oldest_seconds,
+            "worker_enabled": EXTRACTION_WORKER_ENABLED,
+            "poll_seconds": DEFAULT_EXTRACTION_POLL_SECONDS,
+        }
 
     def _memory_keyword_candidates(self, memory_rows: list[sqlite3.Row]) -> list[str]:
         counts: dict[str, int] = {}
@@ -2098,6 +2732,13 @@ class AtlasNodeStore:
             has_retrieval_history = connection.execute(
                 "SELECT 1 FROM usage_events WHERE event_type IN ('read', 'search', 'prompt') LIMIT 1"
             ).fetchone() is not None
+            queue_health = self._queue_health(connection)
+            procedure_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) AS count FROM documents WHERE doc_type = 'procedure'"
+                ).fetchone()["count"]
+            )
+            recent_procedures = self.latest_procedures(4)
 
             return {
                 "state": state,
@@ -2106,11 +2747,8 @@ class AtlasNodeStore:
                     "stored_content_bytes": total_stored_bytes,
                     "document_count": sum(item["count"] for item in stored_breakdown),
                     "memory_count": self._memory_count(connection),
-                    "episode_count": int(
-                        connection.execute(
-                            "SELECT COUNT(*) AS count FROM documents WHERE doc_type = 'episode'"
-                        ).fetchone()["count"]
-                    ),
+                    "episode_count": int(connection.execute("SELECT COUNT(*) AS count FROM documents WHERE doc_type = 'episode'").fetchone()["count"]),
+                    "procedure_count": procedure_count,
                     "breakdown": stored_breakdown,
                 },
                 "usage": {
@@ -2122,10 +2760,20 @@ class AtlasNodeStore:
                         "Retrieval history is only available from the point this AtlasNode build began logging usage events."
                     ),
                 },
+                "health": {
+                    "admission_rejections": self._event_count(connection, "admission_rejected", days),
+                    "extractions_processed": self._event_count(connection, "extraction_processed", days),
+                    "extractions_failed": self._event_count(connection, "extraction_failed", days),
+                    "extractions_retried": self._event_count(connection, "extraction_retried", days),
+                    "search_events": self._event_count(connection, "search", days),
+                    "prompt_events": self._event_count(connection, "prompt", days),
+                    "queue": queue_health,
+                },
                 "categories": self._category_summary(connection),
                 "recent_context": {
                     "semantic": self.latest_memories(4),
                     "episodic": self.recent_episodes(limit=4, days=max(days, 7)),
+                    "procedural": recent_procedures,
                 },
             }
 
