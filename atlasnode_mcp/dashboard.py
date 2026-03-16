@@ -31,6 +31,7 @@ MANAGED_SERVICE_HOST = os.getenv("ATLASNODE_MANAGED_HOST", "127.0.0.1")
 MANAGED_SERVICE_PORT = int(os.getenv("ATLASNODE_MANAGED_PORT", "8000"))
 DASHBOARD_PORT = int(os.getenv("ATLASNODE_DASHBOARD_PORT", "8765"))
 DASHBOARD_IDLE_TIMEOUT_SECONDS = int(os.getenv("ATLASNODE_DASHBOARD_IDLE_TIMEOUT_SECONDS", "20"))
+MANAGED_SERVICE_START_TIMEOUT_SECONDS = float(os.getenv("ATLASNODE_MANAGED_START_TIMEOUT_SECONDS", "75"))
 DASHBOARD_BUILD = datetime.fromtimestamp(Path(__file__).stat().st_mtime, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -205,7 +206,7 @@ class AtlasNodeServiceManager:
             log_handle.close()
 
         self._write_pid_record(pid=process.pid, started_at=_utc_now())
-        deadline = time.time() + 12.0
+        deadline = time.time() + MANAGED_SERVICE_START_TIMEOUT_SECONDS
         while time.time() < deadline:
             current = self.status()
             if current.running:
@@ -1029,20 +1030,18 @@ DASHBOARD_HTML = """<!doctype html>
         return;
       }
 
-      const baseWidth = 660;
-      const baseHeight = 320;
-      const scale = Math.min(width / baseWidth, height / baseHeight) * 1.15;
       const centerX = width / 2;
       const centerY = height / 2;
-      const centerRadius = 40 * scale;
-      const categoryInner = 52 * scale;
-      const categoryOuter = 148 * scale;
-      const childInner = 154 * scale;
-      const childOuter = 224 * scale;
-      const categoryGuide = 134 * scale;
-      const childGuide = 190 * scale;
-      const categoryLabelRadius = 104 * scale;
-      const childLabelRadius = 188 * scale;
+      const outerRadius = Math.max(132, (Math.min(width, height) / 2) - 10);
+      const centerRadius = outerRadius * (40 / 224);
+      const categoryInner = outerRadius * (52 / 224);
+      const categoryOuter = outerRadius * (148 / 224);
+      const childInner = outerRadius * (154 / 224);
+      const childOuter = outerRadius;
+      const categoryGuide = outerRadius * (134 / 224);
+      const childGuide = outerRadius * (190 / 224);
+      const categoryLabelRadius = outerRadius * (104 / 224);
+      const childLabelRadius = outerRadius * (188 / 224);
       const totalBytes = Math.max(1, categories.reduce((sum, item) => sum + (item.bytes || 0), 0));
       const parts = [
         `<rect x="0" y="0" width="${width}" height="${height}" fill="transparent"></rect>`,

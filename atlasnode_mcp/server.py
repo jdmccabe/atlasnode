@@ -29,8 +29,23 @@ def _document_text(identifier: str) -> str:
     return document["content"]
 
 
-def _search_response(query: str, doc_types: set[str], limit: int) -> list[dict[str, str | int | float]]:
-    matches = store.search_documents(query, doc_types, limit=limit)
+def _search_response(
+    query: str,
+    doc_types: set[str],
+    limit: int,
+    *,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
+    matches = store.search_documents(
+        query,
+        doc_types,
+        limit=limit,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
+    )
     return [
         {
             "path": match["id"],
@@ -39,6 +54,7 @@ def _search_response(query: str, doc_types: set[str], limit: int) -> list[dict[s
             "score": match["score"],
             "title": match["title"],
             "type": match["type"],
+            "metadata": match["metadata"],
         }
         for match in matches
     ]
@@ -95,45 +111,109 @@ def list_episodes(limit: int = 50) -> list[str]:
 
 
 @mcp.tool()
-def search_memory(query: str, limit: int = 10) -> list[dict[str, str | int | float]]:
+def search_memory(
+    query: str,
+    limit: int = 10,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
     """Search persisted memories using hybrid vector and lexical retrieval."""
-    return _search_response(query, {"memory"}, limit=limit)
+    return _search_response(
+        query,
+        {"memory"},
+        limit=limit,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
+    )
 
 
 @mcp.tool()
-def search_episodes(query: str, limit: int = 10) -> list[dict[str, str | int | float]]:
+def search_episodes(
+    query: str,
+    limit: int = 10,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
     """Search episodic history records using hybrid vector and lexical retrieval."""
-    return _search_response(query, {"episode"}, limit=limit)
+    return _search_response(
+        query,
+        {"episode"},
+        limit=limit,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
+    )
 
 
 @mcp.tool()
-def write_memory(name: str, content: str, overwrite: bool = False) -> str:
+def write_memory(
+    name: str,
+    content: str,
+    overwrite: bool = False,
+    scope: str = "global",
+    namespace: str | None = None,
+) -> str:
     """Write a durable memory record into the vector store."""
-    return store.write_memory(name, content, overwrite=overwrite)
+    return store.write_memory(name, content, overwrite=overwrite, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
-def remember_fact(name: str, content: str, category: str = "general", overwrite: bool = True) -> str:
+def remember_fact(
+    name: str,
+    content: str,
+    category: str = "general",
+    overwrite: bool = True,
+    scope: str = "global",
+    namespace: str | None = None,
+) -> str:
     """Write or update a semantic fact memory with an optional category."""
-    return store.remember_fact(name, content, category=category, overwrite=overwrite)
+    return store.remember_fact(
+        name,
+        content,
+        category=category,
+        overwrite=overwrite,
+        scope=scope,
+        namespace=namespace,
+    )
 
 
 @mcp.tool()
-def append_memory(name: str, content: str) -> str:
+def append_memory(name: str, content: str, scope: str = "global", namespace: str | None = None) -> str:
     """Append to an existing memory record or create it if missing."""
-    return store.append_memory(name, content)
+    return store.append_memory(name, content, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
-def log_episode(summary: str, title: str | None = None, tags: list[str] | None = None) -> str:
+def log_episode(
+    summary: str,
+    title: str | None = None,
+    tags: list[str] | None = None,
+    scope: str = "global",
+    namespace: str | None = None,
+) -> str:
     """Log a time-ordered episodic summary for recent work, decisions, or session outcomes."""
-    return store.log_episode(summary, title=title, tags=tags)
+    return store.log_episode(summary, title=title, tags=tags, scope=scope, namespace=namespace)
 
 
 @mcp.tool()
-def recent_episodes(limit: int = 8, days: int = 7) -> list[dict[str, Any]]:
+def recent_episodes(
+    limit: int = 8,
+    days: int = 7,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> list[dict[str, Any]]:
     """Return recent episodic history records ordered by recency."""
-    return store.recent_episodes(limit=limit, days=days)
+    return store.recent_episodes(
+        limit=limit,
+        days=days,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
+    )
 
 
 @mcp.tool()
@@ -142,6 +222,9 @@ def resume_context(
     memory_limit: int = 5,
     episode_limit: int = 5,
     days: int = 7,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
 ) -> dict[str, Any]:
     """Return combined semantic and episodic context for resuming work."""
     return store.resume_context(
@@ -149,6 +232,31 @@ def resume_context(
         memory_limit=memory_limit,
         episode_limit=episode_limit,
         days=days,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
+    )
+
+
+@mcp.tool()
+def latest_project_status(
+    query: str | None = None,
+    semantic_limit: int = 5,
+    episode_limit: int = 5,
+    days: int = 14,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> dict[str, Any]:
+    """Return the strongest current project facts plus recent episodes for vague status or next-step prompts."""
+    return store.latest_project_status(
+        query=query,
+        semantic_limit=semantic_limit,
+        episode_limit=episode_limit,
+        days=days,
+        scope=scope,
+        namespace=namespace,
+        include_global=include_global,
     )
 
 

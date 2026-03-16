@@ -119,6 +119,55 @@ LEGACY_DOCUMENT_ALIASES = {
     "brain/memory/MEMORY_PROTOCOL.md": "protocol/memory",
 }
 
+FACT_CATEGORY_ALIASES = {
+    "general": "general",
+    "fact": "general",
+    "facts": "general",
+    "misc": "general",
+    "other": "general",
+    "preference": "preference",
+    "preferences": "preference",
+    "pref": "preference",
+    "project_detail": "project_detail",
+    "project_details": "project_detail",
+    "project": "project_detail",
+    "project_detail_note": "project_detail",
+    "project detail": "project_detail",
+    "project details": "project_detail",
+    "user_bio": "user_bio",
+    "user bio": "user_bio",
+    "bio": "user_bio",
+    "identity": "user_bio",
+    "profile": "user_bio",
+    "workflow": "workflow",
+    "workflow_preference": "workflow",
+    "workflow preference": "workflow",
+    "process": "workflow",
+    "technical": "technical",
+    "tech": "technical",
+    "implementation": "technical",
+    "engineering": "technical",
+}
+
+MEMORY_SCOPE_ALIASES = {
+    "global": "global",
+    "shared": "global",
+    "default": "global",
+    "workspace": "workspace",
+    "project": "workspace",
+    "repo": "workspace",
+    "thread": "thread",
+    "session": "thread",
+    "chat": "thread",
+    "user": "user",
+    "profile": "user",
+}
+
+LOW_VALUE_FACT_PATTERNS = (
+    re.compile(r"^(hi|hello|hey|thanks|thank you|ok|okay|sounds good|got it|cool)[!. ]*$", re.IGNORECASE),
+    re.compile(r"^(test|testing)[!. ]*$", re.IGNORECASE),
+)
+
 _BGE_M3_MODEL: Any | None = None
 _BGE_M3_MODEL_LOCK = Lock()
 
@@ -305,6 +354,112 @@ def _slugify(value: str) -> str:
     if not cleaned:
         raise ValueError("Value must contain letters or numbers.")
     return cleaned[:96]
+
+
+def _normalize_fact_category(category: str) -> str:
+    if not category or not category.strip():
+        return "general"
+    normalized = _slugify(category)
+    mapped = FACT_CATEGORY_ALIASES.get(normalized)
+    if mapped is None:
+        allowed = ", ".join(sorted(set(FACT_CATEGORY_ALIASES.values())))
+        raise ValueError(f"Unknown fact category '{category}'. Allowed categories: {allowed}")
+    return mapped
+
+
+def _normalize_memory_scope(scope: str | None) -> str:
+    if scope is None or not scope.strip():
+        return "global"
+    normalized = _slugify(scope)
+    mapped = MEMORY_SCOPE_ALIASES.get(normalized)
+    if mapped is None:
+        allowed = ", ".join(sorted(set(MEMORY_SCOPE_ALIASES.values())))
+        raise ValueError(f"Unknown memory scope '{scope}'. Allowed scopes: {allowed}")
+    return mapped
+
+
+def _normalize_namespace(namespace: str | None) -> str | None:
+    if namespace is None or not namespace.strip():
+        return None
+    return _slugify(namespace)
+
+
+def _fact_key(name: str) -> str:
+    return _slugify(name)
+
+
+def _semantic_metadata(
+    name: str,
+    category: str,
+    *,
+    scope: str,
+    namespace: str | None,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    previous = existing or {}
+    if previous.get("kind") == "semantic":
+        version = int(previous.get("fact_version") or 0) + 1
+    else:
+        version = 1
+    return {
+        "kind": "semantic",
+        "category": _normalize_fact_category(category),
+        "fact_key": _fact_key(name),
+        "fact_status": "active",
+        "fact_version": version,
+        "scope": _normalize_memory_scope(scope),
+        "namespace": _normalize_namespace(namespace),
+    }
+
+
+def _is_superseded_semantic(metadata: dict[str, Any]) -> bool:
+    return metadata.get("kind") == "semantic" and metadata.get("fact_status") == "superseded"
+
+
+def _memory_metadata(kind: str, *, scope: str, namespace: str | None, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "kind": kind,
+        "scope": _normalize_memory_scope(scope),
+        "namespace": _normalize_namespace(namespace),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _metadata_scope_rank(
+    metadata: dict[str, Any],
+    *,
+    scope: str | None = None,
+    namespace: str | None = None,
+    include_global: bool = True,
+) -> int:
+    if scope is None:
+        return 1
+    target_scope = _normalize_memory_scope(scope)
+    target_namespace = _normalize_namespace(namespace)
+    item_scope = _normalize_memory_scope(str(metadata.get("scope") or "global"))
+    item_namespace = _normalize_namespace(metadata.get("namespace"))
+    if item_scope == target_scope and item_namespace == target_namespace:
+        return 3
+    if include_global and item_scope == "global":
+        return 1
+    return 0
+
+
+def _is_low_value_fact(name: str, content: str, category: str) -> str | None:
+    normalized_content = " ".join(content.strip().split())
+    if not normalized_content:
+        return "content is empty"
+    if any(pattern.match(normalized_content) for pattern in LOW_VALUE_FACT_PATTERNS):
+        return "content looks like low-value chatter"
+    token_count = len(_tokenize(normalized_content))
+    if category == "general" and token_count < 4:
+        return "general facts need more specific detail"
+    if len(normalized_content) < 16 and token_count < 4:
+        return "fact is too short to be reliably useful later"
+    if _slugify(name) == _slugify(normalized_content) and token_count < 6:
+        return "fact duplicates its title without enough detail"
+    return None
 
 
 def _tokenize(text: str) -> list[str]:
@@ -1074,13 +1229,14 @@ class AtlasNodeStore:
             ).fetchone()
             if row is None:
                 raise FileNotFoundError(f"Document not found: {identifier}")
+            metadata = json.loads(row["metadata_json"])
             document = {
                 "id": row["doc_id"],
                 "type": row["doc_type"],
                 "title": row["title"],
                 "content": row["content"],
                 "source": row["source"],
-                "metadata": json.loads(row["metadata_json"]),
+                "metadata": metadata,
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
@@ -1125,7 +1281,16 @@ class AtlasNodeStore:
             scores[row["chunk_id"]] = 1.0 / (1.0 + rank)
         return scores
 
-    def search_documents(self, query: str, doc_types: Iterable[str], limit: int = 10) -> list[dict[str, Any]]:
+    def search_documents(
+        self,
+        query: str,
+        doc_types: Iterable[str],
+        limit: int = 10,
+        *,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
+    ) -> list[dict[str, Any]]:
         normalized_query = query.strip()
         if not normalized_query:
             raise ValueError("Query must not be empty.")
@@ -1158,6 +1323,17 @@ class AtlasNodeStore:
 
             aggregated: dict[str, dict[str, Any]] = {}
             for row in rows:
+                metadata = json.loads(row["metadata_json"])
+                if _is_superseded_semantic(metadata):
+                    continue
+                scope_rank = _metadata_scope_rank(
+                    metadata,
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                )
+                if scope_rank <= 0:
+                    continue
                 embedding = _embedding_from_bytes(row["embedding"])
                 vector_score = max(_dot(query_embedding, embedding), 0.0)
                 lexical_score = lexical_scores.get(row["chunk_id"], 0.0)
@@ -1174,10 +1350,14 @@ class AtlasNodeStore:
                         "score": round(combined, 6),
                         "excerpt": _excerpt(row["content"], normalized_query),
                         "updated_at": row["updated_at"],
-                        "metadata": json.loads(row["metadata_json"]),
+                        "metadata": metadata,
+                        "scope_rank": scope_rank,
                     }
 
-        matches = sorted(aggregated.values(), key=lambda item: (-item["score"], item["id"]))
+        matches = sorted(
+            aggregated.values(),
+            key=lambda item: (-item["scope_rank"], -item["score"], item["id"]),
+        )
         limited_matches = matches[:limit]
         with self._connect() as connection:
             self._record_usage_event(
@@ -1189,6 +1369,8 @@ class AtlasNodeStore:
                     "doc_types": sorted(type_set),
                     "limit": limit,
                     "result_count": len(limited_matches),
+                    "scope": scope,
+                    "namespace": _normalize_namespace(namespace),
                 },
             )
         return limited_matches
@@ -1214,29 +1396,58 @@ class AtlasNodeStore:
             ).fetchall()
             return [row["doc_id"] for row in rows]
 
-    def latest_memories(self, limit: int) -> list[dict[str, Any]]:
+    def latest_memories(
+        self,
+        limit: int,
+        *,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
+    ) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT doc_id, title, content, updated_at
+                SELECT doc_id, title, content, metadata_json, created_at, updated_at
                 FROM documents
                 WHERE doc_type = 'memory'
                 ORDER BY updated_at DESC, doc_id
-                LIMIT ?
                 """,
-                (limit,),
             ).fetchall()
-            return [
-                {
-                    "id": row["doc_id"],
-                    "title": row["title"],
-                    "excerpt": _excerpt(row["content"], row["title"]),
-                    "updated_at": row["updated_at"],
-                }
-                for row in rows
-            ]
+            memories: list[dict[str, Any]] = []
+            for row in rows:
+                metadata = json.loads(row["metadata_json"])
+                if _is_superseded_semantic(metadata):
+                    continue
+                if _metadata_scope_rank(
+                    metadata,
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                ) <= 0:
+                    continue
+                memories.append(
+                    {
+                        "id": row["doc_id"],
+                        "title": row["title"],
+                        "excerpt": _excerpt(row["content"], row["title"]),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "metadata": metadata,
+                    }
+                )
+                if len(memories) >= max(1, limit):
+                    break
+            return memories
 
-    def recent_episodes(self, limit: int = 8, days: int = 7) -> list[dict[str, Any]]:
+    def recent_episodes(
+        self,
+        limit: int = 8,
+        days: int = 7,
+        *,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
+    ) -> list[dict[str, Any]]:
         cutoff = datetime.now(UTC).replace(microsecond=0)
         cutoff = cutoff.timestamp() - (max(1, days) * 86400)
         cutoff_iso = datetime.fromtimestamp(cutoff, UTC).isoformat().replace("+00:00", "Z")
@@ -1251,53 +1462,38 @@ class AtlasNodeStore:
                 """,
                 (cutoff_iso, max(1, limit)),
             ).fetchall()
-            return [
-                {
-                    "id": row["doc_id"],
-                    "title": row["title"],
-                    "excerpt": _excerpt(row["content"], row["title"]),
-                    "created_at": row["created_at"],
-                    "updated_at": row["updated_at"],
-                    "metadata": json.loads(row["metadata_json"]),
-                }
-                for row in rows
-            ]
+            episodes: list[dict[str, Any]] = []
+            for row in rows:
+                metadata = json.loads(row["metadata_json"])
+                if _metadata_scope_rank(
+                    metadata,
+                    scope=scope,
+                    namespace=namespace,
+                    include_global=include_global,
+                ) <= 0:
+                    continue
+                episodes.append(
+                    {
+                        "id": row["doc_id"],
+                        "title": row["title"],
+                        "excerpt": _excerpt(row["content"], row["title"]),
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                        "metadata": metadata,
+                    }
+                )
+                if len(episodes) >= max(1, limit):
+                    break
+            return episodes
 
-    def write_memory(self, name: str, content: str, overwrite: bool = False) -> str:
-        memory_id = f"memory/{_slugify(name)}"
-        with self._connect() as connection:
-            existing = connection.execute(
-                "SELECT doc_id FROM documents WHERE doc_id = ?",
-                (memory_id,),
-            ).fetchone()
-            if existing is not None and not overwrite:
-                raise FileExistsError(f"Memory already exists: {memory_id}")
-
-            self._upsert_document(
-                connection=connection,
-                doc_id=memory_id,
-                doc_type="memory",
-                title=name.strip(),
-                content=content,
-                source="memory",
-                metadata={"kind": "memory"},
-            )
-
-            state = self._row_to_state(
-                connection.execute("SELECT * FROM runtime_state WHERE singleton = 1").fetchone()
-            )
-            state["pending_writes"] = 0
-            state["focus"]["past"] = f"Stored memory {memory_id}"
-            self._save_state(connection, state)
-            return memory_id
-
-    def remember_fact(
+    def write_memory(
         self,
         name: str,
         content: str,
+        overwrite: bool = False,
         *,
-        category: str = "general",
-        overwrite: bool = True,
+        scope: str = "global",
+        namespace: str | None = None,
     ) -> str:
         memory_id = f"memory/{_slugify(name)}"
         with self._connect() as connection:
@@ -1315,7 +1511,68 @@ class AtlasNodeStore:
                 title=name.strip(),
                 content=content,
                 source="memory",
-                metadata={"kind": "semantic", "category": _slugify(category) or "general"},
+                metadata=_memory_metadata("memory", scope=scope, namespace=namespace),
+            )
+
+            state = self._row_to_state(
+                connection.execute("SELECT * FROM runtime_state WHERE singleton = 1").fetchone()
+            )
+            state["pending_writes"] = 0
+            state["focus"]["past"] = f"Stored memory {memory_id}"
+            self._save_state(connection, state)
+            return memory_id
+
+    def remember_fact(
+        self,
+        name: str,
+        content: str,
+        *,
+        category: str = "general",
+        overwrite: bool = True,
+        scope: str = "global",
+        namespace: str | None = None,
+    ) -> str:
+        fact_key = _fact_key(name)
+        normalized_category = _normalize_fact_category(category)
+        normalized_scope = _normalize_memory_scope(scope)
+        normalized_namespace = _normalize_namespace(namespace)
+        rejection_reason = _is_low_value_fact(name, content, normalized_category)
+        if rejection_reason is not None:
+            raise ValueError(f"Fact was not stored: {rejection_reason}.")
+        memory_id = f"memory/{fact_key}"
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT doc_id, content, metadata_json FROM documents WHERE doc_id = ?",
+                (memory_id,),
+            ).fetchone()
+            if existing is not None and not overwrite:
+                raise FileExistsError(f"Memory already exists: {memory_id}")
+            existing_metadata = json.loads(existing["metadata_json"]) if existing is not None else None
+            if existing is not None:
+                existing_scope = _normalize_memory_scope(str(existing_metadata.get("scope") or "global"))
+                existing_namespace = _normalize_namespace(existing_metadata.get("namespace"))
+                if existing_scope != normalized_scope or existing_namespace != normalized_namespace:
+                    raise ValueError(
+                        f"Memory topic '{name}' already exists in scope '{existing_scope}'"
+                        f"{':' + existing_namespace if existing_namespace else ''}."
+                    )
+                if existing["content"].strip() == content.strip() and existing_metadata.get("category") == normalized_category:
+                    return memory_id
+
+            self._upsert_document(
+                connection=connection,
+                doc_id=memory_id,
+                doc_type="memory",
+                title=name.strip(),
+                content=content,
+                source="memory",
+                metadata=_semantic_metadata(
+                    name,
+                    normalized_category,
+                    scope=normalized_scope,
+                    namespace=normalized_namespace,
+                    existing=existing_metadata,
+                ),
             )
 
             state = self._row_to_state(
@@ -1326,19 +1583,28 @@ class AtlasNodeStore:
             self._save_state(connection, state)
             return memory_id
 
-    def append_memory(self, name: str, content: str) -> str:
+    def append_memory(
+        self,
+        name: str,
+        content: str,
+        *,
+        scope: str = "global",
+        namespace: str | None = None,
+    ) -> str:
         memory_id = f"memory/{_slugify(name)}"
         with self._connect() as connection:
             existing = connection.execute(
-                "SELECT content, title FROM documents WHERE doc_id = ?",
+                "SELECT content, title, metadata_json FROM documents WHERE doc_id = ?",
                 (memory_id,),
             ).fetchone()
             if existing is None:
                 merged_content = content.strip()
                 title = name.strip()
+                metadata = _memory_metadata("memory", scope=scope, namespace=namespace)
             else:
                 merged_content = existing["content"].rstrip() + "\n\n" + content.strip()
                 title = existing["title"]
+                metadata = json.loads(existing["metadata_json"])
 
             self._upsert_document(
                 connection=connection,
@@ -1347,7 +1613,7 @@ class AtlasNodeStore:
                 title=title,
                 content=merged_content,
                 source="memory",
-                metadata={"kind": "memory"},
+                metadata=metadata,
             )
 
             state = self._row_to_state(
@@ -1365,6 +1631,8 @@ class AtlasNodeStore:
         title: str | None = None,
         tags: list[str] | None = None,
         occurred_at: str | None = None,
+        scope: str = "global",
+        namespace: str | None = None,
     ) -> str:
         normalized_summary = summary.strip()
         if not normalized_summary:
@@ -1388,11 +1656,13 @@ class AtlasNodeStore:
                 title=(title or f"Episode {day}").strip(),
                 content=normalized_summary,
                 source="episode",
-                metadata={
-                    "kind": "episodic",
-                    "tags": sorted({_slugify(tag) for tag in (tags or []) if _slugify(tag)}),
-                    "occurred_at": timestamp,
-                },
+                metadata=_memory_metadata(
+                    "episodic",
+                    scope=scope,
+                    namespace=namespace,
+                    tags=sorted({_slugify(tag) for tag in (tags or []) if _slugify(tag)}),
+                    occurred_at=timestamp,
+                ),
             )
 
             state = self._row_to_state(
@@ -1410,22 +1680,100 @@ class AtlasNodeStore:
         memory_limit: int = 5,
         episode_limit: int = 5,
         days: int = 7,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
     ) -> dict[str, Any]:
         semantic = (
-            self.search_documents(query, {"memory"}, limit=memory_limit)
+            self.search_documents(
+                query,
+                {"memory"},
+                limit=memory_limit,
+                scope=scope,
+                namespace=namespace,
+                include_global=include_global,
+            )
             if query and query.strip()
-            else self.latest_memories(memory_limit)
+            else self.latest_memories(
+                memory_limit,
+                scope=scope,
+                namespace=namespace,
+                include_global=include_global,
+            )
         )
         episodic = (
-            self.search_documents(query, {"episode"}, limit=episode_limit)
+            self.search_documents(
+                query,
+                {"episode"},
+                limit=episode_limit,
+                scope=scope,
+                namespace=namespace,
+                include_global=include_global,
+            )
             if query and query.strip()
-            else self.recent_episodes(limit=episode_limit, days=days)
+            else self.recent_episodes(
+                limit=episode_limit,
+                days=days,
+                scope=scope,
+                namespace=namespace,
+                include_global=include_global,
+            )
         )
         return {
             "query": query or "",
             "semantic": semantic,
             "episodic": episodic,
             "gate_reason": _memory_gate_reason(query),
+            "scope": _normalize_memory_scope(scope) if scope else None,
+            "namespace": _normalize_namespace(namespace),
+        }
+
+    def latest_project_status(
+        self,
+        query: str | None = None,
+        *,
+        semantic_limit: int = 5,
+        episode_limit: int = 5,
+        days: int = 14,
+        scope: str | None = None,
+        namespace: str | None = None,
+        include_global: bool = True,
+    ) -> dict[str, Any]:
+        semantic = self.resume_context(
+            query=query,
+            memory_limit=max(semantic_limit, 8),
+            episode_limit=episode_limit,
+            days=days,
+            scope=scope,
+            namespace=namespace,
+            include_global=include_global,
+        )["semantic"]
+        project_facts = [
+            item
+            for item in semantic
+            if item.get("metadata", {}).get("category") in {"project_detail", "workflow", "technical"}
+        ][: max(1, semantic_limit)]
+        if not project_facts:
+            project_facts = semantic[: max(1, semantic_limit)]
+        recent_episodes = self.recent_episodes(
+            limit=episode_limit,
+            days=days,
+            scope=scope,
+            namespace=namespace,
+            include_global=include_global,
+        )
+        recommended_focus = None
+        if recent_episodes:
+            recommended_focus = recent_episodes[0]["title"]
+        elif project_facts:
+            recommended_focus = project_facts[0]["title"]
+        return {
+            "query": query or "",
+            "project_facts": project_facts,
+            "recent_episodes": recent_episodes,
+            "recommended_focus": recommended_focus,
+            "scope": _normalize_memory_scope(scope) if scope else None,
+            "namespace": _normalize_namespace(namespace),
         }
 
     def reset_state(self) -> dict[str, Any]:

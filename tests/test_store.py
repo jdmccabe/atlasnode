@@ -116,6 +116,178 @@ class AtlasNodeStoreTests(unittest.TestCase):
         document = self.store.read_document(memory_id)
         self.assertEqual(document["metadata"]["kind"], "semantic")
         self.assertEqual(document["metadata"]["category"], "preference")
+        self.assertEqual(document["metadata"]["fact_key"], "preferred_plotting_library")
+        self.assertEqual(document["metadata"]["fact_status"], "active")
+        self.assertEqual(document["metadata"]["fact_version"], 1)
+
+    def test_remember_fact_normalizes_category_aliases(self) -> None:
+        memory_id = self.store.remember_fact(
+            "current frontend stack",
+            "Project AtlasNode dashboard uses vanilla HTML, CSS, and JavaScript.",
+            category="project details",
+        )
+        document = self.store.read_document(memory_id)
+        self.assertEqual(document["metadata"]["category"], "project_detail")
+
+    def test_remember_fact_rejects_unknown_category(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown fact category"):
+            self.store.remember_fact(
+                "odd category example",
+                "This should not be stored.",
+                category="totally_custom_bucket",
+            )
+
+    def test_remember_fact_overwrite_increments_fact_version(self) -> None:
+        memory_id = self.store.remember_fact(
+            "preferred plotting library",
+            "User prefers matplotlib for quick charts.",
+            category="preference",
+        )
+        updated_id = self.store.remember_fact(
+            "preferred plotting library",
+            "User now prefers plotly for interactive charts.",
+            category="preference",
+            overwrite=True,
+        )
+        self.assertEqual(memory_id, updated_id)
+
+        document = self.store.read_document(memory_id)
+        self.assertIn("plotly", document["content"].lower())
+        self.assertEqual(document["metadata"]["fact_status"], "active")
+        self.assertEqual(document["metadata"]["fact_version"], 2)
+        self.assertEqual(document["metadata"]["fact_key"], "preferred_plotting_library")
+
+    def test_remember_fact_overwrite_false_raises_for_existing_fact(self) -> None:
+        self.store.remember_fact(
+            "preferred plotting library",
+            "User prefers matplotlib for quick charts.",
+            category="preference",
+        )
+        with self.assertRaises(FileExistsError):
+            self.store.remember_fact(
+                "preferred plotting library",
+                "User now prefers plotly for interactive charts.",
+                category="preference",
+                overwrite=False,
+            )
+
+    def test_remember_fact_rejects_low_value_chatter(self) -> None:
+        with self.assertRaisesRegex(ValueError, "low-value chatter"):
+            self.store.remember_fact(
+                "casual greeting",
+                "Thanks!",
+                category="general",
+            )
+
+    def test_scoped_memory_search_prefers_matching_scope(self) -> None:
+        self.store.remember_fact(
+            "current frontend stack",
+            "Workspace Alpha uses React and Vite.",
+            category="project_detail",
+            scope="workspace",
+            namespace="alpha",
+        )
+        self.store.remember_fact(
+            "deployment environment",
+            "Global deployments default to Azure App Service.",
+            category="project_detail",
+            scope="global",
+        )
+
+        scoped = self.store.search_documents(
+            "frontend stack deployment environment",
+            {"memory"},
+            limit=5,
+            scope="workspace",
+            namespace="alpha",
+        )
+        self.assertTrue(any(match["id"] == "memory/current_frontend_stack" for match in scoped))
+        self.assertTrue(any(match["id"] == "memory/deployment_environment" for match in scoped))
+        self.assertGreaterEqual(scoped[0]["scope_rank"], 1)
+
+        other_scope = self.store.search_documents(
+            "frontend stack",
+            {"memory"},
+            limit=5,
+            scope="workspace",
+            namespace="beta",
+            include_global=False,
+        )
+        self.assertFalse(any(match["id"] == "memory/current_frontend_stack" for match in other_scope))
+
+    def test_superseded_semantic_facts_are_hidden_from_default_retrieval(self) -> None:
+        self.store.write_memory(
+            "general dashboard note",
+            "The dashboard still needs a smaller usage chart legend.",
+            overwrite=True,
+        )
+        with self.store._connect() as connection:
+            self.store._upsert_document(
+                connection=connection,
+                doc_id="memory/obsolete_plotting_preference",
+                doc_type="memory",
+                title="obsolete plotting preference",
+                content="User used to prefer gnuplot.",
+                source="memory",
+                metadata={
+                    "kind": "semantic",
+                    "category": "preference",
+                    "fact_key": "obsolete_plotting_preference",
+                    "fact_status": "superseded",
+                    "fact_version": 1,
+                    "superseded_by": "memory/preferred_plotting_library",
+                    "superseded_at": "2026-03-15T00:00:00Z",
+                },
+            )
+
+        matches = self.store.search_documents("gnuplot plotting preference", {"memory"}, limit=5)
+        self.assertFalse(any(match["id"] == "memory/obsolete_plotting_preference" for match in matches))
+
+        latest = self.store.latest_memories(10)
+        self.assertFalse(any(memory["id"] == "memory/obsolete_plotting_preference" for memory in latest))
+        self.assertTrue(any(memory["id"] == "memory/general_dashboard_note" for memory in latest))
+
+        summary = self.store.resume_context(memory_limit=10, episode_limit=3, days=30)
+        self.assertFalse(any(memory["id"] == "memory/obsolete_plotting_preference" for memory in summary["semantic"]))
+
+    def test_latest_project_status_prioritizes_project_facts_and_recent_episodes(self) -> None:
+        self.store.remember_fact(
+            "dashboard frontend stack",
+            "The AtlasNode dashboard is built with vanilla HTML, CSS, and JavaScript.",
+            category="technical",
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        self.store.remember_fact(
+            "release checklist",
+            "Before packaging AtlasNode, rebuild the Windows distribution and rerun tests.",
+            category="workflow",
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        self.store.log_episode(
+            "Finished the scoped memory refactor and verified the tests.",
+            title="Scoped memory refactor",
+            tags=["backend", "memory"],
+            scope="workspace",
+            namespace="atlasnode",
+        )
+
+        status = self.store.latest_project_status(
+            query="what should I do next on AtlasNode?",
+            semantic_limit=3,
+            episode_limit=3,
+            scope="workspace",
+            namespace="atlasnode",
+        )
+        self.assertTrue(status["project_facts"])
+        self.assertTrue(status["recent_episodes"])
+        self.assertIn(
+            status["project_facts"][0]["metadata"]["category"],
+            {"project_detail", "workflow", "technical"},
+        )
+        self.assertEqual(status["recent_episodes"][0]["metadata"]["namespace"], "atlasnode")
+        self.assertIsNotNone(status["recommended_focus"])
 
     def test_log_episode_and_resume_context_return_recent_history(self) -> None:
         episode_id = self.store.log_episode(
