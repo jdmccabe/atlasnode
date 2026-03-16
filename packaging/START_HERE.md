@@ -3,7 +3,7 @@
 This package includes:
 
 - the AtlasNode MCP server
-- the local BGE-M3 embedding model
+- support for a local BGE-M3 embedding model, either already expanded or shipped as sidecar archive parts
 - a bundled Python wheelhouse for offline AtlasNode dependency install
 - the AtlasNode dashboard
 - the dashboard icon and `AtlasNode.lnk` shortcut
@@ -12,6 +12,7 @@ This package includes:
 ## First run
 
 1. Run `install-atlasnode.bat`
+   If you downloaded separate `BAAI--bge-m3-package.zip` or `BAAI--bge-m3-package.zip.001` / `.002` sidecar files, keep them beside the installer before running it.
 2. Launch the dashboard with `run-atlasnode-dashboard.bat` or the included `AtlasNode.lnk`
 3. If you want agents to connect over HTTP, start `run-atlasnode-server.bat`
 
@@ -27,6 +28,7 @@ This package includes:
 - This package expects Python 3.11+ on the machine.
 - `install-atlasnode.bat` installs from the bundled `wheelhouse/` first, then falls back to online install only if needed.
 - The bundled `wheelhouse/` is Windows-specific and tied to the Python major/minor version used to build the package. Offline install works best with that same Python version.
+- `install-atlasnode.bat` can extract `BAAI--bge-m3-package.zip` or reassemble numbered `BAAI--bge-m3-package.zip.001` parts into `models/BAAI--bge-m3/`.
 - The launchers first look for `models/BAAI--bge-m3/`, then `BAAI--bge-m3/` beside the batch files, and fall back to the built-in hash embedder if neither copy is present.
 - The bundled model is already local, so embeddings do not require OpenAI.
 - AtlasNode data is stored under `.atlasnode/` next to the package.

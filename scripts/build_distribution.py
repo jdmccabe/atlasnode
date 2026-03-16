@@ -20,6 +20,10 @@ MODEL_SOURCE = Path(
     )
 )
 MODEL_TARGET = PACKAGE_ROOT / "models" / "BAAI--bge-m3"
+MODEL_ARCHIVE_NAME = "BAAI--bge-m3-package.zip"
+MODEL_DELIVERY_MODE = os.getenv("ATLASNODE_DISTRIBUTION_MODEL_DELIVERY", "sidecar").strip().lower()
+MODEL_SPLIT_SIZE_MB = max(0, int(os.getenv("ATLASNODE_DISTRIBUTION_MODEL_SPLIT_SIZE_MB", "1900")))
+MODEL_SPLIT_SIZE_BYTES = MODEL_SPLIT_SIZE_MB * 1024 * 1024
 WHEELHOUSE_TARGET = PACKAGE_ROOT / "wheelhouse"
 
 COPY_ITEMS = [
@@ -74,6 +78,48 @@ def copy_model(source: Path, target: Path) -> None:
     )
 
 
+def _iter_model_files(source: Path) -> list[Path]:
+    ignored_names = {"README.md", "long.jpg", ".gitattributes"}
+    ignored_dirs = {".cache", "imgs"}
+    return [
+        path
+        for path in source.rglob("*")
+        if path.is_file()
+        and not any(part in ignored_dirs for part in path.relative_to(source).parts)
+        and path.name not in ignored_names
+    ]
+
+
+def create_model_archive(source: Path, archive_path: Path) -> Path:
+    if not source.exists():
+        raise FileNotFoundError(f"Bundled model source not found: {source}")
+    remove_existing(archive_path)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    with ZipFile(archive_path, "w", compression=ZIP_STORED, allowZip64=True) as archive:
+        for path in _iter_model_files(source):
+            archive.write(path, Path("BAAI--bge-m3") / path.relative_to(source))
+    return archive_path
+
+
+def split_file(path: Path, chunk_size: int) -> list[Path]:
+    if chunk_size <= 0 or path.stat().st_size <= chunk_size:
+        return [path]
+
+    parts: list[Path] = []
+    with path.open("rb") as source_handle:
+        index = 1
+        while True:
+            chunk = source_handle.read(chunk_size)
+            if not chunk:
+                break
+            part_path = path.with_suffix(path.suffix + f".{index:03d}")
+            part_path.write_bytes(chunk)
+            parts.append(part_path)
+            index += 1
+    path.unlink()
+    return parts
+
+
 def write_env_files() -> None:
     env_text = "\n".join(
         [
@@ -103,7 +149,11 @@ def write_manifest() -> None:
             "shortcut": "AtlasNode.lnk",
             "agent_template": "agent-template",
         },
+        "model_delivery": MODEL_DELIVERY_MODE,
     }
+    if MODEL_DELIVERY_MODE == "sidecar":
+        manifest["contents"]["model_archive"] = MODEL_ARCHIVE_NAME
+        manifest["contents"]["model_split_size_mb"] = MODEL_SPLIT_SIZE_MB
     (PACKAGE_ROOT / "package-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
@@ -154,6 +204,9 @@ def create_zip_archive() -> Path:
 
 
 def main() -> None:
+    if MODEL_DELIVERY_MODE not in {"embedded", "sidecar"}:
+        raise ValueError("ATLASNODE_DISTRIBUTION_MODEL_DELIVERY must be 'embedded' or 'sidecar'.")
+
     DIST_ROOT.mkdir(parents=True, exist_ok=True)
     remove_existing(PACKAGE_ROOT)
     PACKAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -164,7 +217,15 @@ def main() -> None:
     for source, target in TEMPLATE_ITEMS:
         copy_item(REPO_ROOT / source, PACKAGE_ROOT / target)
 
-    copy_model(MODEL_SOURCE, MODEL_TARGET)
+    model_outputs: list[Path] = []
+    if MODEL_DELIVERY_MODE == "embedded":
+        copy_model(MODEL_SOURCE, MODEL_TARGET)
+    else:
+        model_outputs = split_file(
+            create_model_archive(MODEL_SOURCE, DIST_ROOT / MODEL_ARCHIVE_NAME),
+            MODEL_SPLIT_SIZE_BYTES,
+        )
+
     build_wheelhouse()
     write_env_files()
     write_manifest()
@@ -173,6 +234,10 @@ def main() -> None:
 
     print(f"Built package folder: {PACKAGE_ROOT}")
     print(f"Built package archive: {zip_path}")
+    if model_outputs:
+        print("Built model sidecar archive parts:")
+        for output in model_outputs:
+            print(f"  - {output}")
 
 
 if __name__ == "__main__":
