@@ -12,7 +12,15 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 set "ATLASNODE_EMBEDDING_BACKEND=bge-m3"
-set "ATLASNODE_EMBEDDING_MODEL_PATH=%~dp0models\BAAI--bge-m3"
+set "ATLASNODE_EMBEDDING_MODEL_PATH="
+if exist "%~dp0models\BAAI--bge-m3\config.json" (
+  set "ATLASNODE_EMBEDDING_MODEL_PATH=%~dp0models\BAAI--bge-m3"
+) else if exist "%~dp0BAAI--bge-m3\config.json" (
+  set "ATLASNODE_EMBEDDING_MODEL_PATH=%~dp0BAAI--bge-m3"
+) else (
+  set "ATLASNODE_EMBEDDING_BACKEND=hash"
+  echo Bundled BGE-M3 model not found. Falling back to hash embeddings.>> ".atlasnode\dashboard-launch.log"
+)
 
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":8765 .*LISTENING"') do (
   taskkill /PID %%P /F >nul 2>nul

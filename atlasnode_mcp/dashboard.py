@@ -309,7 +309,11 @@ class DashboardLifetimeManager:
                 os._exit(0)
 
 
-store = AtlasNodeStore(repo_root=REPO_ROOT, data_root=REPO_ROOT / ".atlasnode")
+store = AtlasNodeStore(
+    repo_root=REPO_ROOT,
+    data_root=REPO_ROOT / ".atlasnode",
+    perform_startup_maintenance=False,
+)
 manager = AtlasNodeServiceManager(REPO_ROOT, MANAGED_SERVICE_HOST, MANAGED_SERVICE_PORT)
 session_tracker = DashboardSessionTracker(DASHBOARD_IDLE_TIMEOUT_SECONDS)
 lifetime_manager = DashboardLifetimeManager(session_tracker)

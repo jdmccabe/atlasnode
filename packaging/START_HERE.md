@@ -18,7 +18,7 @@ This package includes:
 ## Included folders
 
 - `atlasnode_mcp/` - server, store, and dashboard source
-- `models/BAAI--bge-m3/` - bundled local embedding model
+- `models/BAAI--bge-m3/` - preferred bundled local embedding model
 - `assets/` - AtlasNode icon assets
 - `agent-template/` - starter files for wiring another workspace to AtlasNode
 
@@ -27,6 +27,7 @@ This package includes:
 - This package expects Python 3.11+ on the machine.
 - `install-atlasnode.bat` installs from the bundled `wheelhouse/` first, then falls back to online install only if needed.
 - The bundled `wheelhouse/` is Windows-specific and tied to the Python major/minor version used to build the package. Offline install works best with that same Python version.
+- The launchers first look for `models/BAAI--bge-m3/`, then `BAAI--bge-m3/` beside the batch files, and fall back to the built-in hash embedder if neither copy is present.
 - The bundled model is already local, so embeddings do not require OpenAI.
 - AtlasNode data is stored under `.atlasnode/` next to the package.
 

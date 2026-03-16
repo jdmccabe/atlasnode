@@ -838,10 +838,17 @@ def _memory_gate_reason(task: str | None) -> str | None:
 
 
 class AtlasNodeStore:
-    def __init__(self, repo_root: Path | None = None, data_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        repo_root: Path | None = None,
+        data_root: Path | None = None,
+        *,
+        perform_startup_maintenance: bool = True,
+    ) -> None:
         self.repo_root = repo_root or Path(__file__).resolve().parent.parent
         self.data_root = data_root or (self.repo_root / ".atlasnode")
         self.db_path = self.data_root / "atlasnode.sqlite3"
+        self.perform_startup_maintenance = perform_startup_maintenance
         self._extraction_stop = Event()
         self._extraction_worker: Thread | None = None
         self._initialize()
@@ -849,10 +856,11 @@ class AtlasNodeStore:
 
     @contextmanager
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=30.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode=WAL;")
         connection.execute("PRAGMA synchronous=NORMAL;")
+        connection.execute("PRAGMA busy_timeout=30000;")
         try:
             yield connection
             connection.commit()
@@ -965,7 +973,8 @@ class AtlasNodeStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_documents_scope ON documents(doc_type, doc_scope, doc_namespace, updated_at DESC)"
             )
-            self._sync_document_scope_columns(connection)
+            if self.perform_startup_maintenance:
+                self._sync_document_scope_columns(connection)
 
             state_row = connection.execute("SELECT singleton FROM runtime_state WHERE singleton = 1").fetchone()
             if state_row is None:
@@ -993,7 +1002,7 @@ class AtlasNodeStore:
                 self._sync_seed_documents(connection)
                 self._set_metadata(connection, "embedding_signature", _active_embedding_signature())
                 self._set_metadata(connection, "chunk_signature", _chunk_signature())
-            else:
+            elif self.perform_startup_maintenance:
                 self._sync_seed_documents(connection)
                 self._sync_embeddings(connection)
 
@@ -1030,12 +1039,16 @@ class AtlasNodeStore:
     def _sync_document_scope_columns(self, connection: sqlite3.Connection) -> None:
         rows = connection.execute(
             """
-            SELECT doc_id, metadata_json
+            SELECT doc_id, doc_scope, doc_namespace, metadata_json
             FROM documents
             """
         ).fetchall()
         for row in rows:
             metadata = json.loads(row["metadata_json"])
+            target_scope = _normalize_memory_scope(str(metadata.get("scope") or "global"))
+            target_namespace = _normalize_namespace(metadata.get("namespace"))
+            if row["doc_scope"] == target_scope and row["doc_namespace"] == target_namespace:
+                continue
             connection.execute(
                 """
                 UPDATE documents
@@ -1043,8 +1056,8 @@ class AtlasNodeStore:
                 WHERE doc_id = ?
                 """,
                 (
-                    _normalize_memory_scope(str(metadata.get("scope") or "global")),
-                    _normalize_namespace(metadata.get("namespace")),
+                    target_scope,
+                    target_namespace,
                     row["doc_id"],
                 ),
             )
