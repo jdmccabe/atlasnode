@@ -30,6 +30,7 @@ This package includes:
 - The bundled `wheelhouse/` is Windows-specific and tied to the Python major/minor version used to build the package. Offline install works best with that same Python version.
 - `install-atlasnode.bat` can extract `BAAI--bge-m3-package.zip` or reassemble numbered `BAAI--bge-m3-package.zip.001` parts into `models/BAAI--bge-m3/`.
 - The launchers first look for `models/BAAI--bge-m3/`, then `BAAI--bge-m3/` beside the batch files, and fall back to the built-in hash embedder if neither copy is present.
+- BGE-M3 is loaded only from a trusted local model directory, with remote model code execution disabled.
 - The bundled model is already local, so embeddings do not require OpenAI.
 - AtlasNode data is stored under `.atlasnode/` next to the package.
 

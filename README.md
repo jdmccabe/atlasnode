@@ -10,7 +10,7 @@ The markdown brain has been removed. Runtime data now lives in `.atlasnode/atlas
 - Each stored document is split into chunks, embedded into dense vectors, and indexed for hybrid retrieval.
 - Search combines vector similarity with SQLite FTS lexical ranking.
 - Prompt assembly is retrieval-driven instead of concatenating static markdown files.
-- AtlasNode now defaults to local `BAAI/bge-m3` embeddings via `sentence-transformers`.
+- AtlasNode now uses local-path-only `BAAI/bge-m3` embeddings via `sentence-transformers`.
 - OpenAI embeddings remain available as an explicit opt-in backend.
 - The deterministic hash embedder remains available as a lightweight fallback for tests or constrained environments.
 - Reindexing is selective: only documents affected by content or embedding-config changes are re-embedded.
@@ -93,19 +93,18 @@ Useful tools:
 ## Semantic recall
 
 - Default backend: `bge-m3`
-- Default local model: `BAAI/bge-m3`
+- BGE-M3 requires `ATLASNODE_EMBEDDING_MODEL_PATH` and only loads from that local directory
 - Optional backend override: `ATLASNODE_EMBEDDING_BACKEND` with `bge-m3`, `openai`, or `hash`
 - Optional local-path override: `ATLASNODE_EMBEDDING_MODEL_PATH`
-- Optional BGE model override: `ATLASNODE_BGE_M3_MODEL`
 - Optional OpenAI model override: `ATLASNODE_OPENAI_EMBEDDING_MODEL`
 - Optional batch-size override: `ATLASNODE_EMBEDDING_BATCH_SIZE`
 - Optional max-length override: `ATLASNODE_EMBEDDING_MAX_LENGTH`
 - Optional FP16 override: `ATLASNODE_EMBEDDING_USE_FP16`
 - OpenAI-only options: `OPENAI_API_KEY`, `ATLASNODE_EMBEDDING_DIMENSIONS`
 
-`ATLASNODE_EMBEDDING_MODEL` is still accepted as a legacy override for whichever backend you explicitly select, but new setups should prefer the backend-specific variables above.
+For security, AtlasNode no longer accepts `ATLASNODE_BGE_M3_MODEL` or `ATLASNODE_EMBEDDING_MODEL` as BGE-M3 model-name overrides, and it loads the local model with remote code execution disabled.
 
-If you keep local models outside the default Hugging Face cache, point `ATLASNODE_EMBEDDING_MODEL_PATH` at your local `bge-m3` directory.
+Point `ATLASNODE_EMBEDDING_MODEL_PATH` at your trusted local `bge-m3` directory.
 
 ## Validation
 

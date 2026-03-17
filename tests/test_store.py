@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
-from atlasnode_mcp.store import AtlasNodeStore, _active_embedding_signature, _embed_texts
+from atlasnode_mcp.store import AtlasNodeStore, _active_embedding_signature, _embed_texts, _load_bge_m3_model
 
 
 class AtlasNodeStoreTests(unittest.TestCase):
@@ -26,6 +26,15 @@ class AtlasNodeStoreTests(unittest.TestCase):
         self.windows_env_patch.start()
         self.addCleanup(self.windows_env_patch.stop)
         self.store = AtlasNodeStore(repo_root=self.repo_root, data_root=self.repo_root / ".atlasnode")
+
+    def _create_local_bge_model_dir(self) -> Path:
+        model_path = self.repo_root / "BAAI--bge-m3"
+        model_path.mkdir(exist_ok=True)
+        (model_path / "config.json").write_text("{}", encoding="utf-8")
+        (model_path / "modules.json").write_text("[]", encoding="utf-8")
+        (model_path / "sentence_bert_config.json").write_text("{}", encoding="utf-8")
+        (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+        return model_path
 
     def test_store_initializes_seed_documents_and_state(self) -> None:
         state = self.store.state_response()
@@ -411,10 +420,11 @@ class AtlasNodeStoreTests(unittest.TestCase):
         self.assertTrue(summary["episodic"])
         self.assertIsNotNone(summary["gate_reason"])
 
-    def test_bge_m3_embedding_backend_is_default(self) -> None:
+    def test_bge_m3_embedding_backend_requires_local_model_path(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            signature = _active_embedding_signature()
-        self.assertEqual(signature, "bge-m3:BAAI/bge-m3")
+            with self.assertRaises(RuntimeError) as error:
+                _active_embedding_signature()
+        self.assertIn("ATLASNODE_EMBEDDING_MODEL_PATH is required", str(error.exception))
 
     def test_bge_m3_embedding_backend_can_use_local_model_path(self) -> None:
         fake_model = Mock()
@@ -423,12 +433,13 @@ class AtlasNodeStoreTests(unittest.TestCase):
         fake_vector_2 = Mock()
         fake_vector_2.tolist.return_value = [0.3, 0.4]
         fake_model.encode.return_value = [fake_vector_1, fake_vector_2]
+        model_path = self._create_local_bge_model_dir()
 
         with patch.dict(
             os.environ,
             {
                 "ATLASNODE_EMBEDDING_BACKEND": "bge-m3",
-                "ATLASNODE_EMBEDDING_MODEL_PATH": str(self.repo_root / "BAAI--bge-m3"),
+                "ATLASNODE_EMBEDDING_MODEL_PATH": str(model_path),
             },
             clear=False,
         ):
@@ -440,6 +451,60 @@ class AtlasNodeStoreTests(unittest.TestCase):
         self.assertEqual(len(embeddings), 2)
         self.assertAlmostEqual(embeddings[0][0], 0.1, places=6)
         fake_model.encode.assert_called_once()
+
+    def test_bge_m3_loader_uses_local_files_only_without_remote_code(self) -> None:
+        fake_sentence_transformers = Mock()
+        fake_model = Mock()
+        fake_sentence_transformers.SentenceTransformer.return_value = fake_model
+        model_path = self._create_local_bge_model_dir()
+
+        with patch.dict(
+            os.environ,
+            {
+                "ATLASNODE_EMBEDDING_BACKEND": "bge-m3",
+                "ATLASNODE_EMBEDDING_MODEL_PATH": str(model_path),
+            },
+            clear=True,
+        ):
+            with patch("atlasnode_mcp.store.importlib.import_module", return_value=fake_sentence_transformers):
+                with patch("atlasnode_mcp.store._BGE_M3_MODEL", None):
+                    model = _load_bge_m3_model()
+
+        self.assertIs(model, fake_model)
+        fake_sentence_transformers.SentenceTransformer.assert_called_once_with(
+            str(model_path),
+            trust_remote_code=False,
+            local_files_only=True,
+        )
+
+    def test_bge_m3_loader_rejects_model_name_override(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ATLASNODE_EMBEDDING_BACKEND": "bge-m3",
+                "ATLASNODE_BGE_M3_MODEL": "BAAI/bge-m3",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(RuntimeError) as error:
+                _active_embedding_signature()
+        self.assertIn("ATLASNODE_BGE_M3_MODEL is disabled", str(error.exception))
+
+    def test_bge_m3_loader_rejects_local_model_with_code_artifacts(self) -> None:
+        model_path = self._create_local_bge_model_dir()
+        (model_path / "custom_module.py").write_text("print('bad')", encoding="utf-8")
+
+        with patch.dict(
+            os.environ,
+            {
+                "ATLASNODE_EMBEDDING_BACKEND": "bge-m3",
+                "ATLASNODE_EMBEDDING_MODEL_PATH": str(model_path),
+            },
+            clear=True,
+        ):
+            with self.assertRaises(RuntimeError) as error:
+                _active_embedding_signature()
+        self.assertIn("contains executable code artifacts", str(error.exception))
 
     def test_openai_embedding_backend_can_be_selected(self) -> None:
         fake_response = Mock()
@@ -475,6 +540,10 @@ class AtlasNodeStoreTests(unittest.TestCase):
         self.assertAlmostEqual(embeddings[1][2], 0.6, places=6)
         mock_post.assert_called_once()
         self.assertEqual(mock_post.call_args.kwargs["json"]["dimensions"], 256)
+        self.assertEqual(
+            mock_post.call_args.args[0],
+            "https://api.openai.com/v1/embeddings",
+        )
 
     def test_openai_embedding_backend_can_use_windows_fallback_key(self) -> None:
         fake_response = Mock()
@@ -495,6 +564,20 @@ class AtlasNodeStoreTests(unittest.TestCase):
         self.assertEqual(len(embeddings), 1)
         self.assertAlmostEqual(embeddings[0][0], 0.1, places=6)
         self.assertEqual(mock_post.call_args.kwargs["headers"]["Authorization"], "Bearer fallback-key")
+
+    def test_openai_embedding_backend_rejects_custom_embeddings_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "ATLASNODE_EMBEDDING_BACKEND": "openai",
+                "OPENAI_API_KEY": "test-key",
+                "ATLASNODE_EMBEDDINGS_URL": "https://evil.example/v1/embeddings",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(RuntimeError) as error:
+                _embed_texts(["first"])
+        self.assertIn("ATLASNODE_EMBEDDINGS_URL is restricted", str(error.exception))
 
 
 if __name__ == "__main__":

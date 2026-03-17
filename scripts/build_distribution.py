@@ -70,6 +70,7 @@ def copy_item(source: Path, target: Path) -> None:
 def copy_model(source: Path, target: Path) -> None:
     if not source.exists():
         raise FileNotFoundError(f"Bundled model source not found: {source}")
+    validate_model_source(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(
         source,
@@ -90,9 +91,30 @@ def _iter_model_files(source: Path) -> list[Path]:
     ]
 
 
+def validate_model_source(source: Path) -> None:
+    required_files = ("config.json", "modules.json", "sentence_bert_config.json")
+    missing = [name for name in required_files if not (source / name).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"Bundled model source is missing required files: {', '.join(missing)}"
+        )
+
+    if not ((source / "tokenizer.json").exists() or (source / "sentencepiece.bpe.model").exists()):
+        raise FileNotFoundError(
+            "Bundled model source must include tokenizer assets."
+        )
+
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"Bundled model source must not contain symlinks: {path}")
+        if path.is_file() and path.suffix.lower() in {".py", ".pyc", ".pyo", ".so", ".dll"}:
+            raise RuntimeError(f"Bundled model source contains executable code artifacts: {path}")
+
+
 def create_model_archive(source: Path, archive_path: Path) -> Path:
     if not source.exists():
         raise FileNotFoundError(f"Bundled model source not found: {source}")
+    validate_model_source(source)
     remove_existing(archive_path)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(archive_path, "w", compression=ZIP_STORED, allowZip64=True) as archive:
@@ -124,7 +146,7 @@ def write_env_files() -> None:
     env_text = "\n".join(
         [
             "ATLASNODE_EMBEDDING_BACKEND=bge-m3",
-            "ATLASNODE_BGE_M3_MODEL=BAAI/bge-m3",
+            "ATLASNODE_EMBEDDING_MODEL_PATH=models\\BAAI--bge-m3",
             "",
         ]
     )

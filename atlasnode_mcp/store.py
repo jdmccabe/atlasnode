@@ -14,6 +14,7 @@ import re
 import sqlite3
 from threading import Event, Lock, Thread
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -608,18 +609,6 @@ def _embedding_backend() -> str:
     return normalized
 
 
-def _bge_m3_model_name() -> str:
-    explicit = os.getenv("ATLASNODE_BGE_M3_MODEL")
-    if explicit:
-        return explicit.strip() or DEFAULT_BGE_M3_MODEL
-
-    legacy = os.getenv("ATLASNODE_EMBEDDING_MODEL")
-    if legacy and os.getenv("ATLASNODE_EMBEDDING_BACKEND", "").strip().lower() in {"bge", "bge-m3", "baai", "local"}:
-        return legacy.strip() or DEFAULT_BGE_M3_MODEL
-
-    return DEFAULT_BGE_M3_MODEL
-
-
 def _bge_m3_model_path() -> str | None:
     raw = _environment_value("ATLASNODE_EMBEDDING_MODEL_PATH")
     if not raw:
@@ -627,8 +616,73 @@ def _bge_m3_model_path() -> str | None:
     return str(Path(raw).expanduser())
 
 
+def _validate_local_bge_m3_model_dir(model_path: Path) -> None:
+    if not model_path.exists() or not model_path.is_dir():
+        raise RuntimeError(
+            "ATLASNODE_EMBEDDING_MODEL_PATH must point to an existing local directory."
+        )
+
+    required_files = ("config.json", "modules.json", "sentence_bert_config.json")
+    missing = [name for name in required_files if not (model_path / name).exists()]
+    if missing:
+        raise RuntimeError(
+            "ATLASNODE_EMBEDDING_MODEL_PATH does not look like a valid local BGE-M3 model directory. "
+            f"Missing required files: {', '.join(missing)}."
+        )
+
+    if not ((model_path / "tokenizer.json").exists() or (model_path / "sentencepiece.bpe.model").exists()):
+        raise RuntimeError(
+            "ATLASNODE_EMBEDDING_MODEL_PATH must include tokenizer assets for the local BGE-M3 model."
+        )
+
+    for candidate in model_path.rglob("*"):
+        if candidate.is_symlink():
+            raise RuntimeError(
+                "ATLASNODE_EMBEDDING_MODEL_PATH must not contain symlinks."
+            )
+        if candidate.is_file() and candidate.suffix.lower() in {".py", ".pyc", ".pyo", ".so", ".dll"}:
+            raise RuntimeError(
+                "ATLASNODE_EMBEDDING_MODEL_PATH contains executable code artifacts, which are not allowed."
+            )
+
+
+def _validated_openai_embeddings_url() -> str:
+    raw = os.getenv("ATLASNODE_EMBEDDINGS_URL", "https://api.openai.com/v1/embeddings").strip()
+    parsed = urlparse(raw)
+    normalized_path = parsed.path.rstrip("/")
+    if parsed.scheme != "https" or parsed.hostname != "api.openai.com" or normalized_path != "/v1/embeddings":
+        raise RuntimeError(
+            "ATLASNODE_EMBEDDINGS_URL is restricted for security. "
+            "OpenAI embeddings must use https://api.openai.com/v1/embeddings."
+        )
+    return raw
+
+
 def _bge_m3_model_source() -> str:
-    return _bge_m3_model_path() or _bge_m3_model_name()
+    explicit = os.getenv("ATLASNODE_BGE_M3_MODEL", "").strip()
+    if explicit:
+        raise RuntimeError(
+            "ATLASNODE_BGE_M3_MODEL is disabled for security. "
+            "Set ATLASNODE_EMBEDDING_MODEL_PATH to a trusted local BGE-M3 directory."
+        )
+
+    legacy = os.getenv("ATLASNODE_EMBEDDING_MODEL", "").strip()
+    if legacy and os.getenv("ATLASNODE_EMBEDDING_BACKEND", "").strip().lower() in {"bge", "bge-m3", "baai", "local"}:
+        raise RuntimeError(
+            "ATLASNODE_EMBEDDING_MODEL is disabled for BGE-M3 for security. "
+            "Set ATLASNODE_EMBEDDING_MODEL_PATH to a trusted local BGE-M3 directory."
+        )
+
+    local_path = _bge_m3_model_path()
+    if not local_path:
+        raise RuntimeError(
+            "ATLASNODE_EMBEDDING_MODEL_PATH is required for ATLASNODE_EMBEDDING_BACKEND=bge-m3. "
+            "AtlasNode now only loads BGE-M3 from a trusted local directory."
+        )
+
+    model_path = Path(local_path)
+    _validate_local_bge_m3_model_dir(model_path)
+    return str(model_path)
 
 
 def _load_bge_m3_model() -> Any:
@@ -651,7 +705,8 @@ def _load_bge_m3_model() -> Any:
 
         _BGE_M3_MODEL = sentence_transformers.SentenceTransformer(
             _bge_m3_model_source(),
-            trust_remote_code=True,
+            trust_remote_code=False,
+            local_files_only=True,
         )
         max_length = os.getenv("ATLASNODE_EMBEDDING_MAX_LENGTH")
         if max_length:
@@ -689,7 +744,7 @@ def _openai_embed_texts(texts: list[str]) -> list[array]:
         payload["dimensions"] = int(dimensions)
 
     response = httpx.post(
-        OPENAI_EMBEDDINGS_URL,
+        _validated_openai_embeddings_url(),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
