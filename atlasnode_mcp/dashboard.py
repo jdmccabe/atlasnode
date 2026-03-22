@@ -43,6 +43,22 @@ def _format_exception(error: Exception) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+def _dashboard_drive_path() -> Path:
+    anchor = store.db_path.anchor or REPO_ROOT.anchor or REPO_ROOT.drive
+    return Path(anchor)
+
+
+def _disk_status() -> dict[str, Any]:
+    drive = _dashboard_drive_path()
+    usage = psutil.disk_usage(str(drive))
+    return {
+        "path": str(drive),
+        "free_bytes": int(usage.free),
+        "total_bytes": int(usage.total),
+        "percent_used": float(usage.percent),
+    }
+
+
 @dataclass
 class ServiceStatus:
     managed: bool
@@ -331,6 +347,9 @@ def _dashboard_payload() -> dict[str, Any]:
             "active_clients": session_tracker.active_clients(),
             "idle_timeout_seconds": DASHBOARD_IDLE_TIMEOUT_SECONDS,
         },
+        "system": {
+            "disk": _disk_status(),
+        },
         "snapshot": snapshot,
     }
 
@@ -505,6 +524,19 @@ DASHBOARD_HTML = """<!doctype html>
       gap: 8px;
       flex-wrap: wrap;
       margin-top: 10px;
+    }
+    .controls-stack {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+      min-width: min(290px, 100%);
+    }
+    .control-meta {
+      width: min(290px, 100%);
+    }
+    .compact-row {
+      padding: 6px 0;
+      font-size: 0.88rem;
     }
     button {
       border: 0;
@@ -781,10 +813,15 @@ DASHBOARD_HTML = """<!doctype html>
             <div id="build-stamp" class="subtle compact-note">UI build: loading...</div>
             <div id="status-detail" class="subtle compact-note">Loading current AtlasNode status.</div>
           </div>
-          <div class="controls">
-            <button id="start-button">Start</button>
-            <button id="stop-button" class="secondary">Stop</button>
-            <button id="refresh-button" class="secondary">Refresh</button>
+          <div class="controls-stack">
+            <div class="controls">
+              <button id="start-button">Start</button>
+              <button id="stop-button" class="secondary">Stop</button>
+              <button id="refresh-button" class="secondary">Refresh</button>
+            </div>
+            <div class="mini-list control-meta">
+              <div class="mini-row compact-row"><span>Disk free</span><span id="disk-free" class="meta">-</span></div>
+            </div>
           </div>
         </div>
       </section>
@@ -1172,6 +1209,8 @@ DASHBOARD_HTML = """<!doctype html>
       const snapshot = data.snapshot;
       const storage = snapshot.storage;
       const state = snapshot.state;
+      const system = data.system || {};
+      const disk = system.disk || {};
 
       document.getElementById("status-dot").className = service.running ? "dot live" : "dot";
       document.getElementById("status-text").textContent = service.running ? "AtlasNode is running" : "AtlasNode is stopped";
@@ -1182,6 +1221,7 @@ DASHBOARD_HTML = """<!doctype html>
       document.getElementById("client-count").textContent = `${data.dashboard.active_clients} active`;
       document.getElementById("idle-timeout").textContent = `${data.dashboard.idle_timeout_seconds}s idle`;
       document.getElementById("service-pid").textContent = service.pid ?? "-";
+      document.getElementById("disk-free").textContent = disk.free_bytes ? `${formatBytes(disk.free_bytes)} free` : "-";
 
       document.getElementById("embedding-backend").textContent = cleanEmbeddingLabel(state.embedding_backend);
       document.getElementById("embedding-summary").textContent = `${state.storage_backend} - ${state.mode} mode`;
